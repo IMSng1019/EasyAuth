@@ -26,6 +26,10 @@ See [wiki](https://github.com/NikitaCartes/EasyAuth/wiki) for more information.
 
 [My Whitelist mod](https://github.com/NikitaCartes/EasyWhitelist) that changes whitelist behaviour from uuid-based to name-based, allowing it to be used on offline servers.
 
+### Supported versions
+- Fabric: Minecraft 1.19.4 - 26.3
+- NeoForge: Minecraft 1.21 - 26.3
+
 ### Dependencies
 This mod requires:
 - `Fabric API` [CurseForge](https://www.curseforge.com/minecraft/mc-mods/fabric-api), [Modrinth](https://modrinth.com/mod/fabric-api)

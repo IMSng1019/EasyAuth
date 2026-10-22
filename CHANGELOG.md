@@ -9,6 +9,14 @@
 - Check how offline players work if they try to connect with a taken online account
 
 ---
+
+### 3.5.0
+##### Minecraft 1.19.4, 1.20[.X], 1.21[.X], 26.[X] on Fabric and NeoForge (1.21+)
+#### Add
+- NeoForge support for Minecraft 1.21 - 26.3 (no extra dependencies required, everything is bundled)
+- Minecraft 26.2 and 26.3 support on Fabric
+
+---
 ### 3.4.4
 ##### Minecraft 1.19.4, 1.20[.X], 1.21[.X], 26.[X]
 #### Fix
