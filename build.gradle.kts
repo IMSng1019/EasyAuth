@@ -1,11 +1,11 @@
 plugins {
     id("java")
     id("java-library")
-    kotlin("jvm") version "2.2.0"
-    id("fabric-loom") version "1.14-SNAPSHOT"
-    id("com.google.devtools.ksp") version "2.2.0-2.0.2"
+    kotlin("jvm") version "2.2.10"
+    id("fabric-loom") version "1.17-SNAPSHOT"
+    id("com.google.devtools.ksp") version "2.3.9"
     id("dev.kikugie.fletching-table.fabric") version "0.1.0-alpha.22"
-    id("com.gradleup.shadow") version "9.3.0"
+    id("com.gradleup.shadow") version "9.4.2"
     id("me.modmuss50.mod-publish-plugin") version "2.1.1"
 }
 
@@ -44,8 +44,8 @@ val awFile = when {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }
 
 loom {
@@ -93,7 +93,7 @@ dependencies {
 
     // Fabric
     minecraft("com.mojang:minecraft:${property("minecraft_version")}")
-    mappings("net.fabricmc:yarn:${property("yarn_mappings")}:v2")
+    mappings(loom.officialMojangMappings())
 
     modImplementation("net.fabricmc:fabric-loader:${property("loader_version")}")
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_version")}")
@@ -190,7 +190,7 @@ tasks.named<Copy>("processGametestResources") {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-    options.release.set(21)
+    options.release.set(25)
 }
 
 tasks.register<Copy>("collectJars") {
