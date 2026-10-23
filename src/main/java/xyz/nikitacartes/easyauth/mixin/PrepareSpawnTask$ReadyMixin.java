@@ -47,7 +47,6 @@ public abstract class PrepareSpawnTask$ReadyMixin {
 
         player.easyAuth$setLastLocation(((PrepareSpawnTaskInterface) field_61141).easyAuth$getSpawnData());
         player.easyAuth$setSkipAuth();
-        player.easyAuth$savePlayerInfo();
 
         return original;
     }

@@ -101,6 +101,10 @@ public abstract class PlayerListMixin {
     //? if >= 1.21.6 {
     @Inject(method = "placeNewPlayer(Lnet/minecraft/network/Connection;Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/server/network/CommonListenerCookie;)V", at = @At("HEAD"))
     private void onPlayerConnectHead(Connection connection, ServerPlayer player, CommonListenerCookie clientData, CallbackInfo ci) {
+        //? if >= 1.21.9 {
+        // PrepareSpawnTask creates the player before it loads the saved data. Read the death state after the load.
+        ((PlayerAuth) player).easyAuth$savePlayerInfo();
+        //?}
         AuthEventHandler.loadPlayerData(player, connection);
 
         if (config.hidePlayerCoords && !((PlayerAuth) player).easyAuth$isAuthenticated()) {
@@ -371,6 +375,17 @@ public abstract class PlayerListMixin {
             return ResourceKey.create(Registries.DIMENSION, new ResourceLocation(config.worldSpawn.dimension));
         }
         return original.call(instance);
+    }
+
+    @WrapOperation(method = "respawn(Lnet/minecraft/server/level/ServerPlayer;Z)Lnet/minecraft/server/level/ServerPlayer;",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerPlayer;setRespawnPosition(Lnet/minecraft/resources/ResourceKey;Lnet/minecraft/core/BlockPos;FZZ)V"))
+    private void keepRespawnPosition(ServerPlayer instance, ResourceKey<Level> dimension, BlockPos pos, float angle, boolean forced, boolean sendMessage, Operation<Void> original, ServerPlayer player, boolean alive) {
+        // The wrappers above move the respawn to the world spawn. Keep the bed or the anchor for the respawn after login.
+        if (!alive && config.hidePlayerCoords && !((PlayerAuth) player).easyAuth$isAuthenticated()) {
+            original.call(instance, player.getRespawnDimension(), player.getRespawnPosition(), player.getRespawnAngle(), player.isRespawnForced(), sendMessage);
+            return;
+        }
+        original.call(instance, dimension, pos, angle, forced, sendMessage);
     }
     *///?}
 

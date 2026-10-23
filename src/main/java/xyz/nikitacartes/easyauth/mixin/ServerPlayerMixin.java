@@ -3,8 +3,11 @@ package xyz.nikitacartes.easyauth.mixin;
 import com.google.common.net.InetAddresses;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.Connection;
+import net.minecraft.nbt.CompoundTag;
 //? if < 1.21.6 {
-/*import net.minecraft.nbt.CompoundTag;
+/*import net.minecraft.nbt.DoubleTag;
+import net.minecraft.nbt.FloatTag;
+import net.minecraft.nbt.ListTag;
 *///?}
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.DamageTypeTags;
@@ -13,6 +16,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 //? if >= 1.21.6 {
 import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
 //?}
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
@@ -125,11 +131,22 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
         if (lastLocation == null) {
             lastLocation = new LastLocation();
         }
-        lastLocation.dimension = registryKey;
+        // Vanilla puts a player from an unknown dimension (removed mod or datapack) in the overworld
+        lastLocation.dimension = server.getLevel(registryKey) != null ? registryKey : Level.OVERWORLD;
     }
 
     @Override
     public void easyAuth$restoreTrueLocation() {
+        easyAuth$moveToTrueLocation();
+        // The snapshot is valid once. /logout and the account removal commands do not take a new snapshot.
+        lastLocation = null;
+        ridingEntityUUID = null;
+        rootVehicle = null;
+        wasDead = false;
+    }
+
+    @Unique
+    private void easyAuth$moveToTrueLocation() {
         if (lastLocation == null || lastLocation.position == null) {
             return;
         }
@@ -160,6 +177,42 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
             }
         }
     }
+
+    // A player who waits for login stands at the world spawn. Write the true location, or /stop and crashes keep the player there.
+    //? if >= 1.21.6 {
+    @Override
+    public void easyAuth$writeTrueLocation(ValueOutput output) {
+        if (isAuthenticated || lastLocation == null || lastLocation.position == null) {
+            return;
+        }
+        output.store("Dimension", Level.RESOURCE_KEY_CODEC, lastLocation.dimension == null ? Level.OVERWORLD : lastLocation.dimension);
+        output.store("Pos", Vec3.CODEC, lastLocation.position);
+        output.store("Rotation", Vec2.CODEC, new Vec2(lastLocation.yaw, lastLocation.pitch));
+        if (rootVehicle != null) {
+            rootVehicle.read("RootVehicle", CompoundTag.CODEC).ifPresent(vehicle -> output.store("RootVehicle", CompoundTag.CODEC, vehicle));
+        }
+    }
+    //?} else {
+    /*@Override
+    public void easyAuth$writeTrueLocation(CompoundTag tag) {
+        if (isAuthenticated || lastLocation == null || lastLocation.position == null) {
+            return;
+        }
+        tag.putString("Dimension", (lastLocation.dimension == null ? Level.OVERWORLD : lastLocation.dimension).location().toString());
+        ListTag position = new ListTag();
+        position.add(DoubleTag.valueOf(lastLocation.position.x));
+        position.add(DoubleTag.valueOf(lastLocation.position.y));
+        position.add(DoubleTag.valueOf(lastLocation.position.z));
+        tag.put("Pos", position);
+        ListTag rotation = new ListTag();
+        rotation.add(FloatTag.valueOf(lastLocation.yaw));
+        rotation.add(FloatTag.valueOf(lastLocation.pitch));
+        tag.put("Rotation", rotation);
+        if (rootVehicle != null) {
+            tag.merge(rootVehicle);
+        }
+    }
+    *///?}
 
     /**
      * Gets the text which tells the player

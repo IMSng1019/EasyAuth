@@ -1,6 +1,8 @@
 //? if <1.21 {
 /*package xyz.nikitacartes.easyauth.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.world.entity.player.Player;
@@ -89,6 +91,16 @@ public class PlayerDataStorageLegacyMixin {
                 );
             }
         }
+    }
+
+    @WrapOperation(method = "save(Lnet/minecraft/world/entity/player/Player;)V",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;saveWithoutId(Lnet/minecraft/nbt/CompoundTag;)Lnet/minecraft/nbt/CompoundTag;"))
+    private CompoundTag saveTrueLocation(Player player, CompoundTag tag, Operation<CompoundTag> original) {
+        CompoundTag result = original.call(player, tag);
+        if (player instanceof PlayerAuth playerAuth) {
+            playerAuth.easyAuth$writeTrueLocation(result);
+        }
+        return result;
     }
 }
 *///?}

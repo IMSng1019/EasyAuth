@@ -1,6 +1,8 @@
 //? if >=1.21 {
 package xyz.nikitacartes.easyauth.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.nbt.CompoundTag;
@@ -9,16 +11,18 @@ import net.minecraft.nbt.NbtAccounter;
 //? if >= 1.21.9 {
 import net.minecraft.server.players.NameAndId;
 //?}
-//? if < 1.21.9 {
-/*import net.minecraft.world.entity.player.Player;
-*///?}
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.storage.PlayerDataStorage;
+//? if >= 1.21.6 {
+import net.minecraft.world.level.storage.ValueOutput;
+//?}
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
 
 import java.io.File;
 import java.io.IOException;
@@ -80,5 +84,26 @@ public class PlayerDataStorageMixin {
             }
         }
     }
+
+    //? if >= 1.21.6 {
+    @WrapOperation(method = "save(Lnet/minecraft/world/entity/player/Player;)V",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;saveWithoutId(Lnet/minecraft/world/level/storage/ValueOutput;)V"))
+    private void saveTrueLocation(Player player, ValueOutput output, Operation<Void> original) {
+        original.call(player, output);
+        if (player instanceof PlayerAuth playerAuth) {
+            playerAuth.easyAuth$writeTrueLocation(output);
+        }
+    }
+    //?} else {
+    /*@WrapOperation(method = "save(Lnet/minecraft/world/entity/player/Player;)V",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;saveWithoutId(Lnet/minecraft/nbt/CompoundTag;)Lnet/minecraft/nbt/CompoundTag;"))
+    private CompoundTag saveTrueLocation(Player player, CompoundTag tag, Operation<CompoundTag> original) {
+        CompoundTag result = original.call(player, tag);
+        if (player instanceof PlayerAuth playerAuth) {
+            playerAuth.easyAuth$writeTrueLocation(result);
+        }
+        return result;
+    }
+    *///?}
 }
 //?}

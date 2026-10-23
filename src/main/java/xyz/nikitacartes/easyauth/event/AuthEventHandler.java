@@ -376,9 +376,8 @@ public class AuthEventHandler {
             playerCache.update();
             return;
         }
-        if (config.hidePlayerCoords) {
-            ((PlayerAuth) player).easyAuth$restoreTrueLocation();
-        }
+        // No config check: the player can stay hidden after an admin disables hidePlayerCoords
+        ((PlayerAuth) player).easyAuth$restoreTrueLocation();
     }
 
     public static boolean isSkipAllAuthChecksApplicable(ServerPlayer player) {

@@ -2,6 +2,7 @@ package xyz.nikitacartes.easyauth.interfaces;
 
 //? if >= 1.21.6 {
 import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 //?}
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.Connection;
@@ -23,6 +24,12 @@ public interface PlayerAuth {
     void easyAuth$saveTrueDimension(ResourceKey<Level> registryKey);
 
     void easyAuth$restoreTrueLocation();
+
+    //? if >= 1.21.6 {
+    void easyAuth$writeTrueLocation(ValueOutput output);
+    //?} else {
+    /*void easyAuth$writeTrueLocation(CompoundTag tag);
+    *///?}
 
     /**
      * Sets the authentication status of the player.
