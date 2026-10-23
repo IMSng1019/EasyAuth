@@ -115,9 +115,12 @@ public class AccountCommand {
                     return;
                 }
                 langConfig.accountDeleted.send(source);
-                playerAuth.easyAuth$setAuthenticated(false);
-                playerAuth.easyAuth$setPlayerEntryV1(new PlayerEntryV1(username));
-                player.connection.disconnect(langConfig.accountDeleted.get());
+                // The vanish integration and the player state change on the server thread only
+                source.getServer().execute(() -> {
+                    playerAuth.easyAuth$setAuthenticated(false);
+                    playerAuth.easyAuth$setPlayerEntryV1(new PlayerEntryV1(username));
+                    player.connection.disconnect(langConfig.accountDeleted.get());
+                });
                 return;
             }
             langConfig.wrongPassword.send(source);

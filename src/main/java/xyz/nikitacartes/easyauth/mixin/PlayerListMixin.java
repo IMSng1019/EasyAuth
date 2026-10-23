@@ -466,9 +466,14 @@ public abstract class PlayerListMixin {
     }
     *///?}
 
+    // NeoForge runs on Mojmap and needs the official lambda name. Fabric needs the intermediary name.
     //? if >= 1.21.9 {
     //?} else if >= 1.21.6 {
-    /*@WrapOperation(method = "method_68176(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/level/storage/ValueInput;)V",
+    /*//? if neoforge {
+    /^@WrapOperation(method = "lambda$placeNewPlayer$1(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/level/storage/ValueInput;)V",
+    ^///?} else {
+    @WrapOperation(method = "method_68176(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/world/level/storage/ValueInput;)V",
+    //?}
             at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerPlayer;loadAndSpawnParentVehicle(Lnet/minecraft/world/level/storage/ValueInput;)V"))
     private static void doNotMountPlayerToVehicle(ServerPlayer instance, ValueInput view, Operation<Void> original) {
         if (config.hidePlayerCoords && !((PlayerAuth) instance).easyAuth$isAuthenticated()) {
@@ -477,7 +482,11 @@ public abstract class PlayerListMixin {
         original.call(instance, view);
     }
     *///?} else if >= 1.21.5 {
-    /*@WrapOperation(method = "method_68176(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/nbt/CompoundTag;)V",
+    /*//? if neoforge {
+    /^@WrapOperation(method = "lambda$placeNewPlayer$1(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/nbt/CompoundTag;)V",
+    ^///?} else {
+    @WrapOperation(method = "method_68176(Lnet/minecraft/server/level/ServerPlayer;Lnet/minecraft/nbt/CompoundTag;)V",
+    //?}
             at = @At(value = "INVOKE", target = "Lnet/minecraft/server/level/ServerPlayer;loadAndSpawnParentVehicle(Lnet/minecraft/nbt/CompoundTag;)V"))
     private static void doNotMountPlayerToVehicle(ServerPlayer serverPlayer, CompoundTag compoundTag, Operation<Void> original) {
         if (config.hidePlayerCoords && !((PlayerAuth) serverPlayer).easyAuth$isAuthenticated()) {
