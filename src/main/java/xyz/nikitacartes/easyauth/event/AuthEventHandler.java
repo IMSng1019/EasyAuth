@@ -323,8 +323,11 @@ public class AuthEventHandler {
         PlayerEntryV1 cachedEntry = PlayersCache.get(incomingPlayerUsername);
         boolean isPremiumPlayer = manager.getServer().usesAuthentication() && cachedEntry != null && cachedEntry.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE;
         Matcher matcher = usernamePattern.matcher(incomingPlayerUsername);
+        // This is only a format exemption for an exact allocated profile. The login listener
+        // independently requires a matching proof on this connection before admission.
+        boolean isAllocatedCustomName = MultiAuth.isReservedCustomProfileName(incomingPlayerUsername, StoneCutterUtils.getId(profile));
 
-        if (!(matcher.matches() || isPremiumPlayer || (extendedConfig.floodgateBypassRegex && FloodgateApiHelper.isFloodgatePlayer(StoneCutterUtils.getId(profile))))) {
+        if (!(matcher.matches() || isPremiumPlayer || isAllocatedCustomName || (extendedConfig.floodgateBypassRegex && FloodgateApiHelper.isFloodgatePlayer(StoneCutterUtils.getId(profile))))) {
             return langConfig.account.usernameInvalid.getNonTranslatable(extendedConfig.usernameRegexp);
         }
         // If the player name and registered name are different, kick the player if differentUsernameCase is enabled
@@ -371,6 +374,7 @@ public class AuthEventHandler {
         ConnectionProofs.Proof sourceProof = MultiAuth.consumeProof(connection, player.getGameProfile());
         playerAuth.easyAuth$setExternalAuthentication(sourceProof != null && sourceProof.custom(),
                 sourceProof != null && sourceProof.relaxChatKeys());
+        playerAuth.easyAuth$setLocalNamePrefix(sourceProof == null ? "" : sourceProof.localNamePrefix());
 
         playerAuth.easyAuth$setIpAddress(connection);
         playerAuth.easyAuth$setSkipAuth();

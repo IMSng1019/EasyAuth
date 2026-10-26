@@ -103,6 +103,9 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
     private String easyAuth$authenticationSourceId;
 
     @Unique
+    private String easyAuth$localNamePrefix = "";
+
+    @Unique
     private boolean wasVanished = false;
 
     @Unique
@@ -275,6 +278,16 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
         return easyAuth$authenticationSourceId;
     }
 
+    @Override
+    public void easyAuth$setLocalNamePrefix(String prefix) {
+        easyAuth$localNamePrefix = java.util.Objects.requireNonNull(prefix);
+    }
+
+    @Override
+    public String easyAuth$getLocalNamePrefix() {
+        return easyAuth$localNamePrefix;
+    }
+
     @ModifyReturnValue(method = "getTabListDisplayName()Lnet/minecraft/network/chat/Component;", at = @At("RETURN"))
     private Component easyAuth$sourceTabName(Component original) {
         return SourceNameDisplay.tabName(player, original);
@@ -386,6 +399,7 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
                 oldPlayerAuth.easyAuth$relaxSourceChatKeys());
         newPlayerAuth.easyAuth$setAuthenticationSource(oldPlayerAuth.easyAuth$getAuthenticationChannel(),
                 oldPlayerAuth.easyAuth$getAuthenticationSourceId());
+        newPlayerAuth.easyAuth$setLocalNamePrefix(oldPlayerAuth.easyAuth$getLocalNamePrefix());
         newPlayerAuth.easyAuth$setAuthenticated(oldPlayerAuth.easyAuth$isAuthenticated());
 
         newPlayerAuth.easyAuth$setPlayerEntryV1(oldPlayerAuth.easyAuth$getPlayerEntryV1());

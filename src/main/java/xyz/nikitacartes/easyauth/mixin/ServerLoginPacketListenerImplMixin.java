@@ -93,10 +93,12 @@ public abstract class ServerLoginPacketListenerImplMixin {
 
         //? if >= 1.20.2 && < 1.21.9 {
         /*try {
-            if (MultiAuth.protectedName(username) && !MultiAuth.enabled()) {
-                throw new IllegalStateException("This player name requires its external authentication source, which is currently disabled");
+            boolean reserved = MultiAuth.protectedName(username) || MultiAuth.reservedCustomName(username);
+            boolean floodgate = FloodgateApiHelper.isFloodgatePlayer(packet.profileId());
+            if (reserved && floodgate) {
+                throw new IllegalStateException("This name is reserved for an external authentication source");
             }
-            if (MultiAuth.enabled() && !FloodgateApiHelper.isFloodgatePlayer(packet.profileId())) {
+            if ((MultiAuth.enabled() || reserved) && !floodgate) {
                 if (!server.usesAuthentication()) {
                     throw new IllegalStateException("External authentication requires online-mode=true");
                 }

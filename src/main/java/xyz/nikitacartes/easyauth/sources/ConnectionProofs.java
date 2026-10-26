@@ -10,13 +10,19 @@ public final class ConnectionProofs<C> {
     private final Map<C, Proof> connections = new WeakHashMap<>();
 
     public record Proof(UUID uuid, String name, boolean custom, boolean relaxChatKeys,
-                        String sourceId, SourceType sourceType) {
+                        String sourceId, SourceType sourceType, String localNamePrefix) {
+        public Proof(UUID uuid, String name, boolean custom, boolean relaxChatKeys, String sourceId, SourceType sourceType) {
+            this(uuid, name, custom, relaxChatKeys, sourceId, sourceType, "");
+        }
+
         public Proof {
             Objects.requireNonNull(uuid);
             Objects.requireNonNull(name);
             Objects.requireNonNull(sourceId);
             Objects.requireNonNull(sourceType);
-            if (sourceId.isBlank() || custom != (sourceType != SourceType.OFFICIAL)) {
+            Objects.requireNonNull(localNamePrefix);
+            if (sourceId.isBlank() || custom != (sourceType != SourceType.OFFICIAL)
+                    || (!custom && !localNamePrefix.isEmpty())) {
                 throw new IllegalArgumentException("Authentication proof source is inconsistent");
             }
         }

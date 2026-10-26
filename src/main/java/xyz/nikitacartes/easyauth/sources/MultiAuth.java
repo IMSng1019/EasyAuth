@@ -138,6 +138,31 @@ public final class MultiAuth {
         }
     }
 
+    /** Namespace matching only prevents unverified local claims; it never proves authentication. */
+    public static boolean reservedCustomName(String name) {
+        try {
+            SourcesConfig snapshot = current;
+            return (snapshot != null && snapshot.isReservedCustomName(name))
+                    || (identities != null && identities.isReservedCustomName(name));
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot check reserved identity namespaces", e);
+        }
+    }
+
+    /** Only exempts a server-allocated name from the legacy username-format regex. */
+    public static boolean isReservedCustomProfileName(String name, UUID uuid) {
+        try {
+            if (identities == null || !identities.isProtectedName(name)) return false;
+            IdentityStore.LocalProfile profile = identities.findByName(name);
+            return profile != null && profile.name().equals(name) && profile.uuid().equals(uuid)
+                    && ExternalProfileNames.localName("", name).equals(name);
+        } catch (IllegalArgumentException e) {
+            return false;
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot validate allocated custom profile name", e);
+        }
+    }
+
     public static void onServerStart(MinecraftServer server) {
         validateServer(current, server);
     }
@@ -180,11 +205,18 @@ public final class MultiAuth {
 
     /** Hello UUID is a routing hint only. It never grants authentication. */
     public static boolean shouldUsePasswordPath(SourcesConfig snapshot, String name, UUID claimedUuid) {
-        if (protectedName(name)) return false;
+        if (protectedName(name) || snapshot.isReservedCustomName(name) || reservedCustomName(name)) return false;
         PlayerEntryV1 existing = DB.getUserData(name);
         if (existing != null && existing.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) return false;
-        if (existing != null && (existing.onlineAccount == PlayerEntryV1.OnlineAccount.FALSE || !existing.password.isEmpty())) return true;
         if (snapshot.isExplicitOfflineName(name)) return true;
+        if (snapshot.hasCustomSources() && claimedUuid != null
+                && !claimedUuid.equals(UUIDUtil.createOfflinePlayerUUID(name))
+                && (existing == null || existing.forcedUuid == null
+                || !existing.forcedUuid.equalsIgnoreCase(claimedUuid.toString()))) {
+            // A routing hint is not authentication: the source must still verify this session.
+            return false;
+        }
+        if (existing != null && (existing.onlineAccount == PlayerEntryV1.OnlineAccount.FALSE || !existing.password.isEmpty())) return true;
         if (snapshot.newPlayerAuth() == SourcesConfig.NewPlayerAuth.EXTERNAL) return false;
         return claimedUuid == null || claimedUuid.equals(UUIDUtil.createOfflinePlayerUUID(name));
     }
@@ -198,21 +230,36 @@ public final class MultiAuth {
         Optional<AuthenticatedIdentity> result = authenticator.authenticate(snapshot, username, serverDigest, address);
         if (result.isEmpty()) return preparePassword(server, username);
         AuthenticatedIdentity identity = result.get();
-        GameProfile profile = prepareVerified(server, identity);
+        VerifiedProfile verified = prepareVerified(server, identity, snapshot);
+        GameProfile profile = verified.profile();
         PROOFS.put(connection, new ConnectionProofs.Proof(StoneCutterUtils.getId(profile),
                 StoneCutterUtils.getName(profile), identity.type() != SourceType.OFFICIAL,
-                snapshot.relaxCustomChatKeys(), identity.sourceId(), identity.type()));
+                snapshot.relaxCustomChatKeys(), identity.sourceId(), identity.type(), verified.localNamePrefix()));
         return profile;
     }
 
-    private static synchronized GameProfile prepareVerified(MinecraftServer server, AuthenticatedIdentity identity) throws Exception {
+    private record VerifiedProfile(GameProfile profile, String localNamePrefix) {}
+
+    private static synchronized VerifiedProfile prepareVerified(MinecraftServer server, AuthenticatedIdentity identity,
+                                                                 SourcesConfig snapshot) throws Exception {
         requireDatabase();
         IdentityStore.LocalProfile local;
         try {
-            local = identities.resolve(identity, new LegacyIdentityGuard(() -> DB, List.of(
+            LegacyIdentityGuard legacyGuard = new LegacyIdentityGuard(() -> DB, List.of(
                     server.getWorldPath(LevelResource.PLAYER_DATA_DIR),
                     server.getWorldPath(LevelResource.PLAYER_STATS_DIR),
-                    server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR))));
+                    server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR)));
+            local = identities.resolve(identity, snapshot.namePrefix(identity.sourceId()), (candidateIdentity, candidate, existing) -> {
+                // Check the actual candidate inside the transaction, before either ledger row is
+                // committed. Existing mappings keep their original names even if config changes.
+                if (!existing && candidateIdentity.type() != SourceType.OFFICIAL) {
+                    String owner = snapshot.reservedNameSource(candidate.name());
+                    if (owner != null && !owner.equals(candidateIdentity.sourceId())) {
+                        throw new IdentityConflictException("SOURCE_NAMESPACE_COLLISION", "This name namespace belongs to another authentication source");
+                    }
+                }
+                legacyGuard.check(candidateIdentity, candidate, existing);
+            });
         } catch (IdentityConflictException conflict) {
             LogWarn("[auth-source] identity rejected source=" + identity.sourceId() + " subject=" + identity.subjectId()
                     + " provider_uuid=" + identity.providerUuid() + " code=" + conflict.code());
@@ -247,12 +294,13 @@ public final class MultiAuth {
         LogInfo("[auth-source] accepted source=" + identity.sourceId() + " subject=" + identity.subjectId()
                 + " profile=" + local.id() + " provider_uuid=" + identity.providerUuid() + " local_uuid=" + local.uuid()
                 + " uuid_policy=" + (identity.providerUuid().equals(local.uuid()) ? "raw" : "isolated_v7"));
-        return profile;
+        return new VerifiedProfile(profile, local.namePrefix());
     }
 
     /** Password fallback keeps the effective legacy UUID and must never claim a source identity. */
     public static GameProfile preparePassword(MinecraftServer server, String username) throws Exception {
         requireDatabase();
+        if (reservedCustomName(username)) throw new IllegalStateException("This name namespace requires verified source authentication");
         PlayerEntryV1 existing = DB.getUserData(username);
         if (protectedName(username)) throw new IllegalStateException("This name belongs to an external identity; sign in using its authentication source");
         if (existing != null && existing.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) {
@@ -268,6 +316,7 @@ public final class MultiAuth {
 
     private static synchronized GameProfile reservePassword(String username) throws Exception {
         requireDatabase();
+        if (reservedCustomName(username)) throw new IllegalStateException("This name namespace cannot be registered as a local password account");
         PlayerEntryV1 entry = DB.getUserData(username);
         if (entry != null && entry.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) {
             throw new IllegalStateException("Premium account cannot fall back to password login");
@@ -341,7 +390,7 @@ public final class MultiAuth {
     /** Updating a legacy account's password does not change its identity. */
     public static boolean rejectExternalRegistration(CommandSourceStack source, String name) {
         try {
-            if (!protectedName(name)) return false;
+            if (!protectedName(name) && !reservedCustomName(name)) return false;
             source.sendFailure(Component.literal("[EasyAuth] External identities authenticate with their source and cannot be registered as local accounts."));
         } catch (RuntimeException e) {
             source.sendFailure(Component.literal("[EasyAuth] Identity ledger unavailable; change refused."));

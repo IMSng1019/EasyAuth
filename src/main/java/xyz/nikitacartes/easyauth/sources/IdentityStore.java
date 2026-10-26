@@ -19,7 +19,9 @@ import java.util.UUID;
  * they never prove that two authentication sources belong to the same person.
  */
 public final class IdentityStore implements AutoCloseable {
-    public record LocalProfile(String id, String name, UUID uuid) {}
+    public record LocalProfile(String id, String name, UUID uuid, String namePrefix) {
+        public LocalProfile(String id, String name, UUID uuid) { this(id, name, uuid, ""); }
+    }
 
     @FunctionalInterface
     public interface LegacyGuard {
@@ -40,13 +42,16 @@ public final class IdentityStore implements AutoCloseable {
             throw new SQLException("Bundled SQLite identity driver is unavailable", e);
         }
         connection = DriverManager.getConnection("jdbc:sqlite:" + absolute);
+        boolean schemaTransaction = false;
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA busy_timeout = 5000");
             statement.execute("PRAGMA foreign_keys = ON");
             statement.execute("PRAGMA journal_mode = WAL");
             statement.execute("PRAGMA synchronous = FULL");
+            statement.execute("BEGIN IMMEDIATE");
+            schemaTransaction = true;
             try (ResultSet version = statement.executeQuery("PRAGMA user_version")) {
-                if (version.next() && version.getInt(1) > 1) {
+                if (version.next() && version.getInt(1) > 2) {
                     throw new SQLException("Identity ledger was created by a newer EasyAuth version");
                 }
             }
@@ -55,9 +60,21 @@ public final class IdentityStore implements AutoCloseable {
                         id TEXT PRIMARY KEY NOT NULL,
                         name TEXT UNIQUE NOT NULL,
                         name_key TEXT UNIQUE NOT NULL,
-                        uuid TEXT UNIQUE NOT NULL
+                        uuid TEXT UNIQUE NOT NULL,
+                        name_prefix TEXT NOT NULL DEFAULT ''
                     )
                     """);
+            boolean hasNamePrefix = false;
+            try (ResultSet columns = statement.executeQuery("PRAGMA table_info(profile)")) {
+                while (columns.next()) {
+                    if ("name_prefix".equals(columns.getString("name"))) hasNamePrefix = true;
+                }
+            }
+            if (!hasNamePrefix) {
+                // Version 1 profiles keep their exact original local name and UUID. This records
+                // only how future profiles were first named; it never renames an existing row.
+                statement.execute("ALTER TABLE profile ADD COLUMN name_prefix TEXT NOT NULL DEFAULT ''");
+            }
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS source_identity (
                         source_id TEXT NOT NULL,
@@ -71,14 +88,28 @@ public final class IdentityStore implements AutoCloseable {
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS identity_profile ON source_identity(profile_id)");
             statement.execute("CREATE INDEX IF NOT EXISTS identity_provider_uuid ON source_identity(provider_uuid)");
-            statement.execute("PRAGMA user_version = 1");
+            statement.execute("PRAGMA user_version = 2");
+            statement.execute("COMMIT");
+            schemaTransaction = false;
         } catch (SQLException | RuntimeException e) {
+            if (schemaTransaction) {
+                try (Statement rollback = connection.createStatement()) {
+                    rollback.execute("ROLLBACK");
+                } catch (SQLException failure) {
+                    e.addSuppressed(failure);
+                }
+            }
             connection.close();
             throw e;
         }
     }
 
     public synchronized LocalProfile resolve(AuthenticatedIdentity identity, LegacyGuard guard) throws SQLException {
+        return resolve(identity, "", guard);
+    }
+
+    /** Allocate an external namespace once; a configuration change never renames a stored profile. */
+    public synchronized LocalProfile resolve(AuthenticatedIdentity identity, String configuredPrefix, LegacyGuard guard) throws SQLException {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(guard, "guard");
         requireText(identity.sourceId(), "source id", 128);
@@ -113,7 +144,11 @@ public final class IdentityStore implements AutoCloseable {
                         ? identity.providerUuid() : UuidV7.generate();
                 case UNION -> UuidV7.generate();
             };
-            LocalProfile candidate = new LocalProfile(UUID.randomUUID().toString(), identity.providerName(), localUuid);
+            String namePrefix = identity.type() == SourceType.OFFICIAL ? "" : ExternalProfileNames.normalizePrefix(configuredPrefix);
+            String localName = identity.type() == SourceType.OFFICIAL ? identity.providerName()
+                    : ExternalProfileNames.localName(namePrefix, identity.providerName());
+            if (identity.type() != SourceType.OFFICIAL) assertNamespaceAvailable(identity.sourceId(), namePrefix, localName);
+            LocalProfile candidate = new LocalProfile(UUID.randomUUID().toString(), localName, localUuid, namePrefix);
             assertVacant(candidate.name(), candidate.uuid());
             guard.check(identity, candidate, false);
             insertProfile(candidate);
@@ -121,6 +156,26 @@ public final class IdentityStore implements AutoCloseable {
                     identity.providerUuid(), identity.providerName(), candidate.id());
             return candidate;
         });
+    }
+
+    public synchronized String reservedNameSource(String name) throws SQLException {
+        String nameKey = name.toLowerCase(Locale.ROOT);
+        String owner = null;
+        try (PreparedStatement statement = customNamespaces(); ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                if (!nameKey.startsWith(rows.getString("name_prefix").toLowerCase(Locale.ROOT))) continue;
+                String sourceId = rows.getString("source_id");
+                if (owner != null && !owner.equals(sourceId)) {
+                    throw conflict("NAMESPACE_CONFLICT", "Multiple persisted sources reserve this local name namespace");
+                }
+                owner = sourceId;
+            }
+        }
+        return owner;
+    }
+
+    public synchronized boolean isReservedCustomName(String name) throws SQLException {
+        return reservedNameSource(name) != null;
     }
 
     /** Reserve the already-selected raw legacy UUID; this method never generates a replacement. */
@@ -133,6 +188,7 @@ public final class IdentityStore implements AutoCloseable {
         String sourceId = "__easyauth_" + source.toLowerCase(Locale.ROOT);
         String subject = uuid.toString();
         return transaction(() -> {
+            assertOutsideCustomNamespace(name);
             LocalProfile existing = findIdentity(sourceId, subject);
             if (existing != null) {
                 if (!existing.name().equals(name) || !existing.uuid().equals(uuid)) {
@@ -150,6 +206,7 @@ public final class IdentityStore implements AutoCloseable {
 
     /** Prevent a failed or disabled external provider from turning its profile into a password account. */
     public synchronized void assertOfflineAllowed(String name, UUID uuid) throws SQLException {
+        assertOutsideCustomNamespace(name);
         LocalProfile byName = findByName(name);
         LocalProfile byUuid = findByUuid(uuid);
         if (byName != null && (!byName.uuid().equals(uuid) || !isRawOfflineProfile(byName.id()))) {
@@ -161,7 +218,7 @@ public final class IdentityStore implements AutoCloseable {
     }
 
     public synchronized LocalProfile findByName(String name) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT id, name, uuid FROM profile WHERE name_key = ?")) {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT id, name, uuid, name_prefix FROM profile WHERE name_key = ?")) {
             statement.setString(1, name.toLowerCase(Locale.ROOT));
             try (ResultSet rows = statement.executeQuery()) {
                 return rows.next() ? profile(rows) : null;
@@ -191,6 +248,34 @@ public final class IdentityStore implements AutoCloseable {
             else statement.setString(1, value);
             try (ResultSet rows = statement.executeQuery()) {
                 return rows.next();
+            }
+        }
+    }
+
+    private PreparedStatement customNamespaces() throws SQLException {
+        return connection.prepareStatement("""
+                SELECT DISTINCT i.source_id, p.name_prefix FROM source_identity i JOIN profile p ON p.id = i.profile_id
+                WHERE i.source_type IN ('UNION', 'SKIN_SITE') AND p.name_prefix <> ''
+                """);
+    }
+
+    private void assertOutsideCustomNamespace(String name) throws SQLException {
+        if (reservedNameSource(name) != null) {
+            throw conflict("RESERVED_CUSTOM_NAMESPACE", "This local name prefix is reserved for an external authentication source; password login cannot claim it");
+        }
+    }
+
+    private void assertNamespaceAvailable(String sourceId, String prefix, String localName) throws SQLException {
+        String prefixKey = prefix.toLowerCase(Locale.ROOT);
+        String nameKey = localName.toLowerCase(Locale.ROOT);
+        try (PreparedStatement statement = customNamespaces(); ResultSet rows = statement.executeQuery()) {
+            while (rows.next()) {
+                if (sourceId.equals(rows.getString("source_id"))) continue;
+                String reserved = rows.getString("name_prefix").toLowerCase(Locale.ROOT);
+                if (nameKey.startsWith(reserved)
+                        || (!prefixKey.isEmpty() && (prefixKey.startsWith(reserved) || reserved.startsWith(prefixKey)))) {
+                    throw conflict("NAMESPACE_CONFLICT", "Another authentication source reserves this local name prefix");
+                }
             }
         }
     }
@@ -236,7 +321,7 @@ public final class IdentityStore implements AutoCloseable {
 
     private LocalProfile findIdentity(String sourceId, String subjectId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT p.id, p.name, p.uuid FROM profile p JOIN source_identity i ON i.profile_id = p.id
+                SELECT p.id, p.name, p.uuid, p.name_prefix FROM profile p JOIN source_identity i ON i.profile_id = p.id
                 WHERE i.source_id = ? AND i.subject_id = ?
                 """)) {
             statement.setString(1, sourceId);
@@ -248,7 +333,7 @@ public final class IdentityStore implements AutoCloseable {
     }
 
     public synchronized LocalProfile findByUuid(UUID uuid) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("SELECT id, name, uuid FROM profile WHERE uuid = ?")) {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT id, name, uuid, name_prefix FROM profile WHERE uuid = ?")) {
             statement.setString(1, uuid.toString());
             try (ResultSet rows = statement.executeQuery()) {
                 return rows.next() ? profile(rows) : null;
@@ -266,11 +351,12 @@ public final class IdentityStore implements AutoCloseable {
     }
 
     private void insertProfile(LocalProfile profile) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO profile(id,name,name_key,uuid) VALUES (?,?,?,?)")) {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO profile(id,name,name_key,uuid,name_prefix) VALUES (?,?,?,?,?)")) {
             statement.setString(1, profile.id());
             statement.setString(2, profile.name());
             statement.setString(3, profile.name().toLowerCase(Locale.ROOT));
             statement.setString(4, profile.uuid().toString());
+            statement.setString(5, profile.namePrefix());
             statement.executeUpdate();
         }
     }
@@ -304,7 +390,7 @@ public final class IdentityStore implements AutoCloseable {
 
     private static LocalProfile profile(ResultSet rows) throws SQLException {
         try {
-            return new LocalProfile(rows.getString("id"), rows.getString("name"), UUID.fromString(rows.getString("uuid")));
+            return new LocalProfile(rows.getString("id"), rows.getString("name"), UUID.fromString(rows.getString("uuid")), rows.getString("name_prefix"));
         } catch (IllegalArgumentException e) {
             throw new SQLException("Identity ledger contains an invalid UUID", e);
         }

@@ -1,6 +1,7 @@
 package xyz.nikitacartes.easyauth.utils;
 
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +33,11 @@ public class PlayersCache {
     public static PlayerEntryV1 loadOrRegister(String username) {
         PlayerEntryV1 playerEntryV1 = DB.getUserData(username);
         if (playerEntryV1 == null) {
+            // Every legacy entry point, including Floodgate integrations, must leave external
+            // namespaces to the verified source allocator rather than creating placeholders.
+            if (MultiAuth.reservedCustomName(username)) {
+                throw new IllegalStateException("This name namespace requires verified source authentication");
+            }
             playerEntryV1 = new PlayerEntryV1(username);
             if (config.offlineByDefault) {
                 playerEntryV1.onlineAccount = PlayerEntryV1.OnlineAccount.FALSE;

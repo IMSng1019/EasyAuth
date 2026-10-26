@@ -81,6 +81,8 @@ public interface PlayerAuth {
     void easyAuth$setAuthenticationSource(AuthenticationChannel channel, String sourceId);
     AuthenticationChannel easyAuth$getAuthenticationChannel();
     String easyAuth$getAuthenticationSourceId();
+    void easyAuth$setLocalNamePrefix(String prefix);
+    String easyAuth$getLocalNamePrefix();
     /**
      * Gets the player's IP address on connection step.
      *

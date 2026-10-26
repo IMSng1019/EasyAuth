@@ -147,8 +147,8 @@ class SourcesConfigTest {
 
     @Test void disabledSourcePrefixDoesNotChangeLegacyAuthentication() throws Exception {
         SourcesConfig config = load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0,\"timeoutMillis\":2000,\"namePrefix\":\"[正版] \"},"
-                + "{\"id\":\"campus\",\"type\":\"SKIN_SITE\",\"priority\":1,\"enabled\":false,\"apiRoot\":\"https://campus.test\",\"namePrefix\":\"[高校] \"}]");
-        assertEquals("[高校] ", config.namePrefix("campus"));
+                + "{\"id\":\"campus\",\"type\":\"SKIN_SITE\",\"priority\":1,\"enabled\":false,\"apiRoot\":\"https://campus.test\",\"namePrefix\":\"[CAMPUS] \"}]");
+        assertEquals("[CAMPUS] ", config.namePrefix("campus"));
         assertTrue(config.usesLegacyAuthentication());
     }
 
@@ -185,5 +185,66 @@ class SourcesConfigTest {
             assertThrows(IllegalArgumentException.class, () -> loadPrefixes("\"offlineNamePrefix\":" + value + ",", "[]"));
             assertThrows(IllegalArgumentException.class, () -> loadPrefixes("\"floodgateNamePrefix\":" + value + ",", "[]"));
         }
+    }
+
+    private SourcesConfig loadCustomPrefix(SourceType type, String prefix, boolean enabled) throws Exception {
+        JsonObject source = new JsonObject();
+        source.addProperty("id", "campus");
+        source.addProperty("type", type.name());
+        source.addProperty("apiRoot", "https://campus.test/yggdrasil");
+        source.addProperty("enabled", enabled);
+        source.addProperty("namePrefix", prefix);
+        if (type == SourceType.UNION) source.addProperty("mappedUrl", "https://campus.test/mapped/{uuid}");
+        return load("[" + source + "]");
+    }
+
+    @Test void customPrefixesAcceptBracketsAndRetainOriginalDisplaySpacing() throws Exception {
+        for (SourceType type : new SourceType[]{SourceType.UNION, SourceType.SKIN_SITE}) {
+            assertEquals("[MUA] ", loadCustomPrefix(type, "[MUA] ", true).namePrefix("campus"));
+            assertEquals("", loadCustomPrefix(type, "", true).namePrefix("campus"));
+            assertEquals("A".repeat(15), loadCustomPrefix(type, "A".repeat(15), true).namePrefix("campus"));
+        }
+    }
+
+    @Test void customPrefixesRejectInvalidActualNameNamespacesEvenWhenDisabled() {
+        for (SourceType type : new SourceType[]{SourceType.UNION, SourceType.SKIN_SITE}) {
+            for (boolean enabled : new boolean[]{true, false}) {
+                for (String value : new String[]{"[高校]", "[A B]", "A".repeat(16), "[A]\nB", "[A]\u007f"}) {
+                    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                            () -> loadCustomPrefix(type, value, enabled), type + " enabled=" + enabled);
+                    assertTrue(error.getMessage().contains("namePrefix"), error.getMessage());
+                }
+            }
+        }
+    }
+
+    @Test void customNamespacesReserveNamesIncludingDisabledSourcesWithoutActivatingAuthentication() throws Exception {
+        SourcesConfig config = load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0,\"timeoutMillis\":2000,\"namePrefix\":\"[MUA] \"},"
+                + "{\"id\":\"campus\",\"type\":\"UNION\",\"priority\":1,\"enabled\":false,\"apiRoot\":\"https://campus.test\",\"mappedUrl\":\"https://campus.test/mapped/{uuid}\",\"namePrefix\":\"[MUA] \"}]");
+        assertEquals("campus", config.reservedNameSource("[MUA]LXW1019"));
+        assertEquals("campus", config.reservedNameSource("[mua]LXW1019"));
+        assertTrue(config.isReservedCustomName("[MUA]"));
+        assertNull(config.reservedNameSource("LXW1019"));
+        assertNull(config.reservedNameSource("Other[MUA]Name"));
+        assertFalse(config.isReservedCustomName("[OTHER]Name"));
+        assertTrue(config.usesLegacyAuthentication());
+    }
+
+    @Test void customNamespacesCannotOverlapAcrossSources() {
+        for (String second : new String[]{"[MUA]", "[mua]", "[MUA]X", "[M"}) {
+            assertThrows(IllegalArgumentException.class, () -> load("["
+                    + "{\"id\":\"first\",\"type\":\"SKIN_SITE\",\"priority\":1,\"apiRoot\":\"https://a.test\",\"namePrefix\":\"[MUA] \"},"
+                    + "{\"id\":\"second\",\"type\":\"SKIN_SITE\",\"priority\":2,\"enabled\":false,\"apiRoot\":\"https://b.test\",\"namePrefix\":\"" + second + "\"}]"));
+        }
+    }
+
+    @Test void emptyCustomPrefixesAndOfficialDisplayLabelsDoNotReserveNamespaces() throws Exception {
+        SourcesConfig config = load("["
+                + "{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0,\"namePrefix\":\"[VIP] \"},"
+                + "{\"id\":\"first\",\"type\":\"SKIN_SITE\",\"priority\":1,\"apiRoot\":\"https://a.test\",\"namePrefix\":\"\"},"
+                + "{\"id\":\"second\",\"type\":\"SKIN_SITE\",\"priority\":2,\"apiRoot\":\"https://b.test\",\"namePrefix\":\"   \"}]");
+        assertNull(config.reservedNameSource("[VIP]Alice"));
+        assertNull(config.reservedNameSource("Alice"));
+        assertFalse(config.isReservedCustomName(""));
     }
 }

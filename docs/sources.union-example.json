@@ -33,7 +33,7 @@
     {
       "id": "my-skin-site",
       "type": "SKIN_SITE",
-      "namePrefix": "[皮肤站] ",
+      "namePrefix": "[SKIN] ",
       "enabled": false,
       "priority": 20,
       "apiRoot": "https://skin.example.org/api/yggdrasil",

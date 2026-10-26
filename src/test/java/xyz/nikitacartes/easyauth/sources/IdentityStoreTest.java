@@ -48,6 +48,132 @@ class IdentityStoreTest {
         }
     }
 
+    @Test void prefixedUnionIsIndependentFromSameNamedOfficialAccount() throws Exception {
+        Path file = directory.resolve("identities.db");
+        UUID officialUuid = UUID.randomUUID();
+        UUID unionUuid = UUID.randomUUID();
+        IdentityStore.LocalProfile local;
+        try (IdentityStore store = new IdentityStore(file)) {
+            var official = store.resolve(identity("official", SourceType.OFFICIAL, officialUuid.toString(), officialUuid, "LXW1019"), "[IGNORED]", AVAILABLE);
+            var guard = new LegacyIdentityPolicy(() -> List.of(
+                    new LegacyIdentityPolicy.Account("LXW1019", officialUuid, null, true, false)), List.of(directory));
+            local = store.resolve(identity("union", SourceType.UNION, "42", unionUuid, "LXW1019"), "[MUA] ", guard);
+            assertEquals("LXW1019", official.name());
+            assertEquals(officialUuid, official.uuid());
+            assertEquals("", official.namePrefix());
+            assertEquals("[MUA]LXW1019", local.name());
+            assertEquals("[MUA]", local.namePrefix());
+            assertEquals(7, local.uuid().version());
+            assertNotEquals(official.uuid(), local.uuid());
+            assertNotEquals(official.id(), local.id());
+            assertEquals(official, store.findByName("LXW1019"));
+            assertEquals(local, store.findByName("[MUA]LXW1019"));
+        }
+        try (IdentityStore store = new IdentityStore(file)) {
+            assertEquals(local, store.resolve(identity("union", SourceType.UNION, "42", UUID.randomUUID(), "Renamed"), "[NEW]", AVAILABLE));
+        }
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+             var statement = connection.createStatement();
+             var rows = statement.executeQuery("SELECT provider_name, name_prefix FROM source_identity JOIN profile ON profile.id = profile_id WHERE source_id = 'union'")) {
+            assertTrue(rows.next());
+            assertEquals("Renamed", rows.getString("provider_name"), "Provider metadata must retain the raw upstream name");
+            assertEquals("[MUA]", rows.getString("name_prefix"));
+        }
+    }
+
+    @Test void skinPrefixChangesNameWithoutChangingItsNativeUuid() throws Exception {
+        UUID nativeUuid = UuidV7.generate();
+        try (IdentityStore store = new IdentityStore(directory.resolve("identities.db"))) {
+            var local = store.resolve(identity("skin", SourceType.SKIN_SITE, "stable", nativeUuid, "Alice"), "[SKIN]", AVAILABLE);
+            assertEquals("[SKIN]Alice", local.name());
+            assertEquals(nativeUuid, local.uuid());
+        }
+    }
+
+    @Test void overlongOrInvalidPrefixedNameCannotCreateAnyIdentity() throws Exception {
+        try (IdentityStore store = new IdentityStore(directory.resolve("identities.db"))) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> store.resolve(union("long", "abcdefghijklmnop"), "[MUA]", AVAILABLE));
+            assertThrows(IllegalArgumentException.class,
+                    () -> store.resolve(union("invalid", "Alice"), "[高校]", AVAILABLE));
+            assertFalse(store.hasCustomIdentities());
+            assertNull(store.findByName("abcdefghijklmnop"));
+            assertNull(store.findByName("Alice"));
+        }
+    }
+
+    @Test void localPrefixDoesNotPermitOfficialUuidImpersonation() throws Exception {
+        UUID officialUuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("identities.db"))) {
+            store.resolve(identity("official", SourceType.OFFICIAL, officialUuid.toString(), officialUuid, "LXW1019"), AVAILABLE);
+            var conflict = assertThrows(IdentityConflictException.class,
+                    () -> store.resolve(identity("union", SourceType.UNION, "evil", officialUuid, "LXW1019"), "[MUA]", AVAILABLE));
+            assertEquals("OFFICIAL_UUID_COLLISION", conflict.code());
+            assertNull(store.findByName("[MUA]LXW1019"));
+        }
+    }
+
+    @Test void allocatedCustomNamespaceProtectsOtherNamesAfterReopen() throws Exception {
+        Path file = directory.resolve("identities.db");
+        try (IdentityStore store = new IdentityStore(file)) {
+            store.resolve(union("first", "Alice"), "[MUA]", AVAILABLE);
+        }
+        try (IdentityStore store = new IdentityStore(file)) {
+            assertEquals("union", store.reservedNameSource("[mua]NotRegistered"));
+            assertTrue(store.isReservedCustomName("[MUA]Bob"));
+            assertNull(store.reservedNameSource("Not[MUA]Bob"));
+            assertThrows(IdentityConflictException.class,
+                    () -> store.assertOfflineAllowed("[MUA]Bob", UUID.randomUUID()));
+            assertThrows(IdentityConflictException.class,
+                    () -> store.reserveLegacy("[MUA]Bob", UUID.randomUUID(), "OFFLINE"));
+        }
+    }
+
+    @Test void anotherSourceCannotClaimPersistedNamespaceOrOverlappingPrefix() throws Exception {
+        try (IdentityStore store = new IdentityStore(directory.resolve("identities.db"))) {
+            store.resolve(union("first", "Alice"), "[MUA]", AVAILABLE);
+            assertThrows(IdentityConflictException.class, () -> store.resolve(
+                    identity("other", SourceType.SKIN_SITE, "one", UuidV7.generate(), "[MUA]Bob"), "", AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.resolve(
+                    identity("other", SourceType.SKIN_SITE, "two", UuidV7.generate(), "Bob"), "[mua]", AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.resolve(
+                    identity("other", SourceType.SKIN_SITE, "three", UuidV7.generate(), "Bob"), "[M", AVAILABLE));
+            assertEquals("[MUA]Bob", store.resolve(union("second", "Bob"), "[MUA]", AVAILABLE).name());
+        }
+    }
+
+    @Test void verifiedOfficialIdentityIsNotBlockedByNamespaceAlone() throws Exception {
+        UUID officialUuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("identities.db"))) {
+            store.resolve(union("first", "Alice"), "M_", AVAILABLE);
+            var official = store.resolve(identity("official", SourceType.OFFICIAL, officialUuid.toString(), officialUuid, "M_Bob"), AVAILABLE);
+            assertEquals("M_Bob", official.name());
+            assertEquals(officialUuid, official.uuid());
+        }
+    }
+
+    @Test void schemaOneUpgradePreservesOldUnprefixedIdentity() throws Exception {
+        Path file = directory.resolve("old-identities.db");
+        UUID oldUuid = UuidV7.generate();
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE profile(id TEXT PRIMARY KEY NOT NULL,name TEXT UNIQUE NOT NULL,name_key TEXT UNIQUE NOT NULL,uuid TEXT UNIQUE NOT NULL)");
+            statement.execute("CREATE TABLE source_identity(source_id TEXT NOT NULL,subject_id TEXT NOT NULL,source_type TEXT NOT NULL,provider_uuid TEXT NOT NULL,provider_name TEXT NOT NULL,profile_id TEXT NOT NULL REFERENCES profile(id),PRIMARY KEY(source_id,subject_id))");
+            statement.execute("INSERT INTO profile VALUES ('old-profile','Alice','alice','" + oldUuid + "')");
+            statement.execute("INSERT INTO source_identity VALUES ('union','legacy-42','UNION','" + UUID.randomUUID() + "','Alice','old-profile')");
+            statement.execute("PRAGMA user_version = 1");
+        }
+        try (IdentityStore store = new IdentityStore(file)) {
+            var existing = store.resolve(union("legacy-42", "AChangedName"), "[MUA]", AVAILABLE);
+            assertEquals(new IdentityStore.LocalProfile("old-profile", "Alice", oldUuid), existing);
+            assertEquals("", existing.namePrefix());
+        }
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file);
+             var statement = connection.createStatement(); var rows = statement.executeQuery("PRAGMA user_version")) {
+            assertTrue(rows.next());
+            assertEquals(2, rows.getInt(1));
+        }
+    }
+
     @Test void nativeSkinV7RemainsRawAndOtherVersionsAreMapped() throws Exception {
         UUID nativeUuid = UUID.fromString("01900000-0000-7000-8000-000000000001");
         UUID v4 = UUID.randomUUID();

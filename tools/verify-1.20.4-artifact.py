@@ -12,11 +12,11 @@ with zipfile.ZipFile(jar) as archive:
     assert not duplicates, f"Duplicate entries: {duplicates}"
     metadata = json.loads(archive.read("fabric.mod.json"))
     assert metadata["id"] == "easyauth"
-    assert metadata["version"] == "4.0.0-multisource.2", metadata["version"]
+    assert metadata["version"] == "4.0.0-multisource.3", metadata["version"]
     assert metadata["depends"]["java"] == ">=17", metadata["depends"]
     assert "1.20.3" in metadata["depends"]["minecraft"]
     assert "MIT License" in archive.read("LICENSE").decode("utf-8")
-    for required in ("MultiAuth", "IdentityStore", "SourcesConfig", "SourceAuthenticator", "UuidV7"):
+    for required in ("MultiAuth", "IdentityStore", "SourcesConfig", "SourceAuthenticator", "UuidV7", "ExternalProfileNames"):
         assert f"xyz/nikitacartes/easyauth/sources/{required}.class" in names, required
     for name in names:
         if name.startswith("xyz/nikitacartes/easyauth/") and name.endswith(".class"):

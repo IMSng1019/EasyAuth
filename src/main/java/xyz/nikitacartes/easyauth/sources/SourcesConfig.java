@@ -56,13 +56,16 @@ public final class SourcesConfig {
     private final List<Pattern> offlineNames;
     private final String offlineNamePrefix;
     private final String floodgateNamePrefix;
+    private final List<NameNamespace> customNameNamespaces;
+
+    private record NameNamespace(String sourceId, String lowerCasePrefix) { }
 
     /** Vanilla hello packets cannot distinguish a new offline player from a skin-site v3 player. */
     public enum NewPlayerAuth { AUTO, EXTERNAL }
 
     private SourcesConfig(List<Source> sources, int parallelism, int overallTimeoutMillis, boolean relaxCustomChatKeys,
                           NewPlayerAuth newPlayerAuth, List<Pattern> offlineNames,
-                          String offlineNamePrefix, String floodgateNamePrefix) {
+                          String offlineNamePrefix, String floodgateNamePrefix, List<NameNamespace> customNameNamespaces) {
         this.sources = List.copyOf(sources);
         this.parallelism = parallelism;
         this.overallTimeoutMillis = overallTimeoutMillis;
@@ -71,6 +74,7 @@ public final class SourcesConfig {
         this.offlineNames = List.copyOf(offlineNames);
         this.offlineNamePrefix = offlineNamePrefix;
         this.floodgateNamePrefix = floodgateNamePrefix;
+        this.customNameNamespaces = List.copyOf(customNameNamespaces);
     }
 
     public record Source(String id, SourceType type, boolean enabled, int priority,
@@ -126,6 +130,7 @@ public final class SourcesConfig {
             Set<String> ids = new HashSet<>();
             Set<Integer> priorities = new HashSet<>();
             List<Source> sources = new ArrayList<>();
+            List<NameNamespace> namespaces = new ArrayList<>();
             int officialCount = 0;
             for (JsonElement element : array) {
                 if (!element.isJsonObject()) throw invalid("each source must be an object");
@@ -150,6 +155,23 @@ public final class SourcesConfig {
                 int timeout = bounded(obj, "timeoutMillis", 1500, 100, 10000);
                 int retries = bounded(obj, "retries", 0, 0, 3);
                 String namePrefix = prefix(obj, "namePrefix");
+                if (type != SourceType.OFFICIAL) {
+                    String namespacePrefix;
+                    try {
+                        namespacePrefix = ExternalProfileNames.normalizePrefix(namePrefix).toLowerCase(Locale.ROOT);
+                    } catch (IllegalArgumentException e) {
+                        throw invalid("source " + id + " namePrefix: " + e.getMessage());
+                    }
+                    if (!namespacePrefix.isEmpty()) {
+                        for (NameNamespace namespace : namespaces) {
+                            if (namespace.lowerCasePrefix().startsWith(namespacePrefix)
+                                    || namespacePrefix.startsWith(namespace.lowerCasePrefix())) {
+                                throw invalid("namePrefix namespaces overlap between sources " + namespace.sourceId() + " and " + id);
+                            }
+                        }
+                        namespaces.add(new NameNamespace(id, namespacePrefix));
+                    }
+                }
                 String rootUrl = optional(obj, "apiRoot");
                 String joinedUrl = optional(obj, "hasJoinedUrl");
                 String mapping = optional(obj, "mappedUrl");
@@ -204,7 +226,8 @@ public final class SourcesConfig {
             for (Source source : enabled) {
                 if (source.type() == SourceType.OFFICIAL && source != enabled.get(0)) throw invalid("OFFICIAL must have the highest priority (smallest number)");
             }
-            return new SourcesConfig(sources, parallelism, budget, relax, newPlayerAuth, offlineNames, offlineNamePrefix, floodgateNamePrefix);
+            return new SourcesConfig(sources, parallelism, budget, relax, newPlayerAuth, offlineNames,
+                    offlineNamePrefix, floodgateNamePrefix, namespaces);
         } catch (com.google.gson.JsonParseException | IllegalStateException | UnsupportedOperationException e) {
             throw invalid("malformed JSON or field type: " + e.getMessage());
         }
@@ -338,7 +361,19 @@ public final class SourcesConfig {
         return sources.stream().filter(source -> source.type() == SourceType.OFFICIAL).map(Source::namePrefix).findFirst().orElse("");
     }
 
-    /** Display-only prefixes do not change whether the original authentication flow remains active. */
+    /** Namespaces are reservations, not authentication evidence; disabled sources retain ownership. */
+    public String reservedNameSource(String localName) {
+        if (localName == null) return null;
+        String lowerCaseName = localName.toLowerCase(Locale.ROOT);
+        for (NameNamespace namespace : customNameNamespaces) {
+            if (lowerCaseName.startsWith(namespace.lowerCasePrefix())) return namespace.sourceId();
+        }
+        return null;
+    }
+
+    public boolean isReservedCustomName(String localName) { return reservedNameSource(localName) != null; }
+
+    /** Name prefix settings do not activate an authentication source. */
     public boolean usesLegacyAuthentication() {
         if (parallelism != 4 || overallTimeoutMillis != 6000 || relaxCustomChatKeys
                 || newPlayerAuth != NewPlayerAuth.AUTO || !offlineNames.isEmpty()) return false;

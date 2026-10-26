@@ -25,6 +25,12 @@ public final class SourceNameDisplay {
         PlayerAuth auth = (PlayerAuth) player;
         AuthenticationChannel channel = auth.easyAuth$getAuthenticationChannel();
         if (channel == null) return ""; // A display hook may run before ServerPlayer fields initialize.
+        if ((channel == AuthenticationChannel.UNION || channel == AuthenticationChannel.SKIN_SITE)
+                && auth.easyAuth$getLocalNamePrefix() != null && !auth.easyAuth$getLocalNamePrefix().isEmpty()) {
+            // The creation-time namespace is already part of the real, persisted GameProfile
+            // name. Do not infer this from startsWith(), and never rename it during config reload.
+            return "";
+        }
         String sourceId = auth.easyAuth$getAuthenticationSourceId();
         return switch (channel) {
             case FLOODGATE -> config.floodgateNamePrefix();
