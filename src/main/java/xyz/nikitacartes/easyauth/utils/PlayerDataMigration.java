@@ -4,6 +4,7 @@ import net.minecraft.core.UUIDUtil;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 import org.jetbrains.annotations.Nullable;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -40,7 +41,8 @@ public final class PlayerDataMigration {
      * when {@code forced-offline-uuid} is on, since then everyone deliberately keeps the offline UUID.
      */
     public static boolean shouldMigrate(String username, UUID connectionUuid) {
-        return !extendedConfig.forcedOfflineUuid && !connectionUuid.equals(offlineUuid(username));
+        return !MultiAuth.preventAutomaticMigration() && !extendedConfig.forcedOfflineUuid
+                && !connectionUuid.equals(offlineUuid(username));
     }
 
     /**

@@ -36,6 +36,8 @@ import xyz.nikitacartes.easyauth.integrations.ClientModBridge;
 import xyz.nikitacartes.easyauth.integrations.VanishIntegration;
 import xyz.nikitacartes.easyauth.protocol.ClientModProtocol;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.ConnectionProofs;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.storage.database.DBReadException;
 import xyz.nikitacartes.easyauth.integrations.FloodgateApiHelper;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
@@ -365,6 +367,10 @@ public class AuthEventHandler {
         }
         playerAuth.easyAuth$setPlayerEntryV1(cache);
 
+        ConnectionProofs.Proof sourceProof = MultiAuth.consumeProof(connection, player.getGameProfile());
+        playerAuth.easyAuth$setExternalAuthentication(sourceProof != null && sourceProof.custom(),
+                sourceProof != null && sourceProof.relaxChatKeys());
+
         playerAuth.easyAuth$setIpAddress(connection);
         playerAuth.easyAuth$setSkipAuth();
 
@@ -625,6 +631,9 @@ public class AuthEventHandler {
     }
 
     public static void onPreLogin(ServerLoginPacketListenerImpl netHandler) {
+        // A sources-enabled server preserves official and custom UUIDs. Ledger ownership survives
+        // disabling sources, so the legacy rewrite must also stay off for those persisted accounts.
+        if (MultiAuth.preventAutomaticMigration()) return;
         //? if >= 1.20.2 {
         if (extendedConfig.forcedOfflineUuid && netHandler.authenticatedProfile != null) {
             //? if >= 1.21.9 {

@@ -119,7 +119,13 @@ dependencies {
 
     implementation("org.spongepowered:configurate-hocon:${property("hocon_version")}")
     shadow("org.spongepowered:configurate-hocon:${property("hocon_version")}")
+
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
+
+tasks.test { useJUnitPlatform() }
 
 tasks.shadowJar {
     archiveClassifier.set("dev-shadow")
@@ -151,10 +157,12 @@ tasks.withType<ProcessResources>().configureEach {
 }
 
 tasks.processResources {
+    inputs.property("modVersion", dynamicVersion)
     filesMatching("fabric.mod.json") {
         expand(
             mapOf(
                 "version" to dynamicVersion,
+                "java_version" to 25,
                 "supported_minecraft_version" to project.property("supported_minecraft_version"),
                 "accessWidener" to awFile
             )

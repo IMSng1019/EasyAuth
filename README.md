@@ -1,4 +1,7 @@
 ## EasyAuth
+
+This fork adds opt-in multi-source authentication for **Fabric Minecraft 1.20.4** (Java 17+): Mojang, MUA Union with persistent local UUIDv7, and multiple Yggdrasil skin sites. See the [Chinese setup guide](docs/MULTI_AUTH.zh-CN.md) and [Union configuration example](docs/sources.union-example.json), including the 1.20.4 offline-client routing limitation. Default settings retain the upstream authentication flow.
+
 ### Authentication mod for your Offline/Online server for Fabric and NeoForge
 
 EasyAuth disallows players who aren't authenticated to do actions like placing blocks, moving, typing commands or use the inventory.

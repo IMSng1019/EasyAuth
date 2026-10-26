@@ -110,6 +110,9 @@ public abstract class ServerGamePacketListenerImplMixin {
     //? if >= 1.20.2 {
     @WrapMethod(method = "handleChatSessionUpdate(Lnet/minecraft/network/protocol/game/ServerboundChatSessionUpdatePacket;)V")
     private void onPlayerSessionWrap(ServerboundChatSessionUpdatePacket packet, Operation<Void> original) {
+        // Only this already-verified external connection may opt out. Official players still use
+        // vanilla certificate validation, even if other sources relax their chat key requirements.
+        if (((PlayerAuth) this.player).easyAuth$relaxSourceChatKeys()) return;
         if (!extendedConfig.forcedOfflineUuid || !((PlayerAuth) this.player).easyAuth$isUsingMojangAccount()) {
             original.call(packet);
         }

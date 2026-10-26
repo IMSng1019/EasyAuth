@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerPlayer;
 import xyz.nikitacartes.easyauth.dialog.AuthDialogs;
 import xyz.nikitacartes.easyauth.integrations.EasyAuthPermissions;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.storage.RegCode;
 import xyz.nikitacartes.easyauth.storage.database.DBApiException;
 import xyz.nikitacartes.easyauth.utils.AuthHelper;
@@ -68,6 +69,10 @@ public class AuthCommand {
                 .then(literal("reload")
                         .requires(EasyAuthPermissions.require("easyauth.commands.auth.reload", 3))
                         .executes(ctx -> reloadConfig(ctx.getSource()))
+                )
+                .then(literal("sources")
+                        .requires(EasyAuthPermissions.require("easyauth.commands.auth.reload", 3))
+                        .then(literal("reload").executes(ctx -> MultiAuth.reload(ctx.getSource())))
                 )
                 .then(literal("setGlobalPassword")
                         .requires(EasyAuthPermissions.require("easyauth.commands.auth.setGlobalPassword", 4))
@@ -345,7 +350,13 @@ public class AuthCommand {
      * @return 0
      */
     public static int reloadConfig(CommandSourceStack sender) {
-        reloadConfigs(sender.getServer());
+        try {
+            reloadConfigs(sender.getServer());
+        } catch (RuntimeException e) {
+            LogError("EasyAuth configuration reload rejected", e);
+            sender.sendFailure(Component.literal("[EasyAuth] Reload rejected: " + e.getMessage()));
+            return 0;
+        }
 
         langConfig.admin.configReloaded.send(sender);
 
@@ -427,6 +438,7 @@ public class AuthCommand {
      * @return 0
      */
     public static int removeAccount(CommandSourceStack source, String username) {
+        if (MultiAuth.rejectIdentityEdit(source, username)) return 0;
         runDbTask(source, () -> {
             PlayerEntryV1 playerEntry = DB.getUserData(username);
             if (playerEntry == null) {
@@ -460,6 +472,7 @@ public class AuthCommand {
      * @return 0
      */
     public static int registerUser(CommandSourceStack source, String username, String password) {
+        if (MultiAuth.rejectExternalRegistration(source, username)) return 0;
         runDbTask(source, () -> {
             PlayerEntryV1 playerData = DB.getUserDataOrCreate(username);
             String hash = AuthHelper.hashPassword(password.toCharArray());
@@ -558,6 +571,7 @@ public class AuthCommand {
      * @return 0
      */
     public static int markAsOffline(CommandSourceStack source, String username) {
+        if (MultiAuth.rejectIdentityEdit(source, username)) return 0;
         runDbTask(source, () -> {
             PlayerEntryV1 entry = DB.getUserDataOrCreate(username);
             entry.onlineAccount = PlayerEntryV1.OnlineAccount.FALSE;
@@ -576,6 +590,7 @@ public class AuthCommand {
      * @return 0
      */
     public static int markAsOnline(CommandSourceStack source, String username) {
+        if (MultiAuth.rejectIdentityEdit(source, username)) return 0;
         runDbTask(source, () -> {
             try {
                 if (!isValidUsername(username)) {
@@ -688,6 +703,7 @@ public class AuthCommand {
      * @return 1 on success
      */
     public static int migrate(CommandSourceStack source, String oldUsername, String newUsername) {
+        if (MultiAuth.rejectIdentityEdit(source, oldUsername) || MultiAuth.rejectIdentityEdit(source, newUsername)) return 0;
         if (oldUsername.equalsIgnoreCase(newUsername)) {
             langConfig.admin.migrateSameName.send(source);
             return 0;
@@ -753,6 +769,7 @@ public class AuthCommand {
      * @return 1 on success
      */
     public static int migrateUuid(CommandSourceStack source, UUID from, UUID to) {
+        if (MultiAuth.rejectUuidEdit(source, from) || MultiAuth.rejectUuidEdit(source, to)) return 0;
         if (from.equals(to)) {
             langConfig.admin.migrateSameName.send(source);
             return 0;
@@ -860,6 +877,7 @@ public class AuthCommand {
      * @return 1 on success
      */
     public static int setUuid(CommandSourceStack source, String username, String uuidStr) {
+        if (MultiAuth.rejectIdentityEdit(source, username)) return 0;
         runDbTask(source, () -> {
             // Validate UUID format
             UUID uuid;
@@ -869,6 +887,7 @@ public class AuthCommand {
                 langConfig.uuid.invalidFormat.send(source, uuidStr);
                 return;
             }
+            if (MultiAuth.rejectIdentityEdit(source, username) || MultiAuth.rejectUuidEdit(source, uuid)) return;
 
             // Reject a UUID already owned by another account (identity-spoofing protection).
             // Two storage locations to check: the natural `uuid` column (getUsernameByUuid) and
@@ -912,6 +931,7 @@ public class AuthCommand {
      * @return 1 on success
      */
     public static int clearUuid(CommandSourceStack source, String username) {
+        if (MultiAuth.rejectIdentityEdit(source, username)) return 0;
         runDbTask(source, () -> {
             PlayerEntryV1 entry = DB.getUserData(username);
             if (entry == null) {

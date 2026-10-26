@@ -1,7 +1,11 @@
 package xyz.nikitacartes.easyauth.mixin;
 
 import com.mojang.authlib.GameProfile;
+import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.network.Connection;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.login.ServerboundKeyPacket;
 import net.minecraft.network.protocol.login.ServerboundHelloPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerLoginPacketListenerImpl;
@@ -14,6 +18,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import xyz.nikitacartes.easyauth.EasyAuth;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.integrations.FloodgateApiHelper;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
+import xyz.nikitacartes.easyauth.sources.IdentityConflictException;
+import xyz.nikitacartes.easyauth.sources.SourcesConfig;
 import xyz.nikitacartes.easyauth.utils.PlayersCache;
 
 import java.io.IOException;
@@ -42,6 +50,16 @@ public abstract class ServerLoginPacketListenerImplMixin {
     @Final
     @Shadow
     MinecraftServer server;
+
+    @Final
+    @Shadow
+    Connection connection;
+
+    @Unique
+    private SourcesConfig easyAuth$sourceSnapshot;
+
+    @Unique
+    private String easyAuth$sourceUsername;
 
     @Unique
     private static final Pattern pattern = Pattern.compile("^[a-zA-Z0-9_]{1,16}$");
@@ -72,6 +90,32 @@ public abstract class ServerLoginPacketListenerImplMixin {
         String username = packet.name();
 
         LogDebug("UUID of player " + username + " is " + packet.profileId());
+
+        //? if >= 1.20.2 && < 1.21.9 {
+        /*try {
+            if (MultiAuth.protectedName(username) && !MultiAuth.enabled()) {
+                throw new IllegalStateException("This player name requires its external authentication source, which is currently disabled");
+            }
+            if (MultiAuth.enabled() && !FloodgateApiHelper.isFloodgatePlayer(packet.profileId())) {
+                if (!server.usesAuthentication()) {
+                    throw new IllegalStateException("External authentication requires online-mode=true");
+                }
+                easyAuth$sourceSnapshot = MultiAuth.snapshot();
+                easyAuth$sourceUsername = username;
+                if (MultiAuth.shouldUsePasswordPath(easyAuth$sourceSnapshot, username, packet.profileId())) {
+                    state = ServerLoginPacketListenerImpl.State.AUTHENTICATING;
+                    MultiAuth.submitLogin(() -> easyAuth$completeSourceLogin(null), true);
+                    ci.cancel();
+                }
+                // Otherwise let vanilla generate the challenge and validate the encryption response.
+                return;
+            }
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+            ci.cancel();
+            return;
+        }
+        *///?}
 
         PlayerEntryV1 playerData;
         try {
@@ -200,4 +244,63 @@ public abstract class ServerLoginPacketListenerImplMixin {
     private boolean checkUuid(Optional<UUID> uuid, UUID onlineUuid) {
         return uuid.isPresent() && uuid.get().equals(onlineUuid);
     }
+
+    //? if >= 1.20.2 && < 1.21.9 {
+    /*// The original method has already verified the challenge, derived this signed digest and
+    // enabled encryption. Reuse that exact digest; never recompute from a different server id.
+    @Inject(method = "handleKey(Lnet/minecraft/network/protocol/login/ServerboundKeyPacket;)V",
+            at = @At(value = "INVOKE", target = "Ljava/lang/Thread;start()V"), cancellable = true)
+    private void easyAuth$authenticateSources(ServerboundKeyPacket packet, CallbackInfo ci,
+                                              @Local(ordinal = 0) String digest) {
+        if (easyAuth$sourceSnapshot == null) return;
+        try {
+            MultiAuth.submitLogin(() -> easyAuth$completeSourceLogin(digest), false);
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+        }
+        ci.cancel();
+    }
+
+    @Unique
+    private void easyAuth$completeSourceLogin(String digest) {
+        try {
+            GameProfile profile = digest == null
+                    ? MultiAuth.preparePassword(server, easyAuth$sourceUsername)
+                    : MultiAuth.authenticate(server, connection, easyAuth$sourceSnapshot, easyAuth$sourceUsername, digest);
+            if (connection.isConnected()) {
+                authenticatedProfile = profile;
+                state = ServerLoginPacketListenerImpl.State.VERIFYING;
+            } else {
+                MultiAuth.forget(connection);
+            }
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+        }
+    }
+
+    @Unique
+    private void easyAuth$rejectSourceLogin(Exception error) {
+        MultiAuth.forget(connection);
+        LogWarn("[auth-source] login rejected for " + easyAuth$sourceUsername + ": "
+                + (error instanceof IdentityConflictException conflict ? conflict.code() + ": " : "") + error.getMessage());
+        ((ServerLoginPacketListenerImpl) (Object) this).disconnect(
+                Component.literal("[EasyAuth] " + error.getMessage()));
+    }
+
+    @Inject(method = "verifyLoginAndFinishConnectionSetup(Lcom/mojang/authlib/GameProfile;)V",
+            at = @At("HEAD"), cancellable = true)
+    private void easyAuth$guardReservedIdentity(GameProfile profile, CallbackInfo ci) {
+        try {
+            MultiAuth.beforeVerification(connection, profile);
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "onDisconnect", at = @At("HEAD"))
+    private void easyAuth$clearSourceProof(Component reason, CallbackInfo ci) {
+        MultiAuth.forget(connection);
+    }
+    *///?}
 }

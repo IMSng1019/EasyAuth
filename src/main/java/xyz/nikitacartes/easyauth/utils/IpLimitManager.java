@@ -258,7 +258,7 @@ public class IpLimitManager {
             return false;
         }
         long now = System.currentTimeMillis();
-        Deque<Long> attempts = loginAttempts.computeIfAbsent(ipAddress, _ -> new ArrayDeque<>());
+        Deque<Long> attempts = loginAttempts.computeIfAbsent(ipAddress, ignored -> new ArrayDeque<>());
         synchronized (attempts) { // ArrayDeque is not thread-safe
             while (!attempts.isEmpty() && now - attempts.peekFirst() > LOGIN_WINDOW_MS) {
                 attempts.pollFirst();

@@ -127,7 +127,13 @@ dependencies {
     shaded("org.mongodb:mongodb-driver-core:${property("mongodb_version")}")
     shaded("org.mongodb:bson:${property("mongodb_version")}")
     shaded("org.spongepowered:configurate-hocon:${property("hocon_version")}")
+
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
+
+tasks.test { useJUnitPlatform() }
 
 tasks.shadowJar {
     archiveClassifier.set("dev-shadow")

@@ -7,7 +7,8 @@
   "entrypoints": {
     "fabric-gametest": [
       "xyz.nikitacartes.easyauth.EasyAuthMixinTest",
-      "xyz.nikitacartes.easyauth.utils.TotpTest"
+      "xyz.nikitacartes.easyauth.utils.TotpTest",
+      "xyz.nikitacartes.easyauth.sources.MultiAuthRuntimeTest"
     ]
   }
 }

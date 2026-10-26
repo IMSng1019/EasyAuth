@@ -11,6 +11,8 @@ import xyz.nikitacartes.easyauth.storage.RegCodeStore;
 import xyz.nikitacartes.easyauth.storage.database.*;
 import xyz.nikitacartes.easyauth.integrations.LuckPermsIntegration;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
+import xyz.nikitacartes.easyauth.sources.SourcesConfig;
 
 import java.io.File;
 import java.io.FileReader;
@@ -93,6 +95,8 @@ public class EasyAuth {
             return;
         }
 
+        MultiAuth.onServerStart(server);
+
         if (storageConfig.backupOnStart) {
             autoBackup("start");
         }
@@ -135,12 +139,17 @@ public class EasyAuth {
         }
 
         // Closing DbApi connection
+        MultiAuth.close();
         if (DB != null) {
             DB.close();
         }
     }
 
     public static void loadConfigs() {
+        loadConfigs(MultiAuth.readConfig());
+    }
+
+    private static void loadConfigs(SourcesConfig sources) {
         regCodes = RegCodeStore.load();
 
         int configVersion = VersionConfig.load().configVersion;
@@ -154,6 +163,7 @@ public class EasyAuth {
             EasyAuth.storageConfig = StorageConfigV1.create();
             EasyAuth.dialogConfig = DialogConfigV1.create();
             EasyAuth.proxyConfig = ProxyConfigV1.create();
+            MultiAuth.install(sources);
             return;
         }
 
@@ -171,6 +181,7 @@ public class EasyAuth {
         EasyAuth.proxyConfig = ProxyConfigV1.load();
 
         configMigration(configVersion);
+        MultiAuth.install(sources);
     }
 
     public static void saveConfigs() {
@@ -184,6 +195,11 @@ public class EasyAuth {
     }
 
     public static void reloadConfigs(MinecraftServer server) {
+        // Invalid source settings must not close the working account DB or replace the live
+        // authentication snapshot. Source-only reload is also available as /auth sources reload.
+        SourcesConfig candidateSources = MultiAuth.readConfig();
+        MultiAuth.validate(candidateSources, ExtendedConfigV1.load(), ProxyConfigV1.load());
+        MultiAuth.validateServer(candidateSources, server);
         if (DB != null) {
             DB.close();
         }
@@ -191,7 +207,7 @@ public class EasyAuth {
         boolean regAlias = extendedConfig.aliases.register;
         boolean loginAlias = extendedConfig.aliases.login;
 
-        EasyAuth.loadConfigs();
+        EasyAuth.loadConfigs(candidateSources);
 
         if (DB == null) {
             DB = getDbApi();

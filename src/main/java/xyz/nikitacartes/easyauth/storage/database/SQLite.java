@@ -214,10 +214,19 @@ public class SQLite implements DbApi {
 
     @Override
     public HashMap<String, PlayerEntryV1> getAllData() {
-        HashMap<String, PlayerEntryV1> registeredPlayers = new HashMap<>();
         try {
-            Statement statement = connection.createStatement();
-            ResultSet resultSet = statement.executeQuery("SELECT * FROM " + config.sqlite.sqliteTable + ";");
+            return getAllDataStrict();
+        } catch (DBReadException e) {
+            LogError("Error retrieving all data", e);
+            return new HashMap<>();
+        }
+    }
+
+    @Override
+    public HashMap<String, PlayerEntryV1> getAllDataStrict() {
+        HashMap<String, PlayerEntryV1> registeredPlayers = new HashMap<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("SELECT * FROM " + config.sqlite.sqliteTable + ";")) {
             while (resultSet.next()) {
                 String username = resultSet.getString("username");
                 String usernameLowerCase = resultSet.getString("username_lower");
@@ -225,10 +234,8 @@ public class SQLite implements DbApi {
                 String data = resultSet.getString("data");
                 registeredPlayers.put(username, new PlayerEntryV1(username, usernameLowerCase, uuid, data));
             }
-            resultSet.close();
-            statement.close();
-        } catch (SQLException e) {
-            LogError("Error retrieving all data", e);
+        } catch (SQLException | RuntimeException e) {
+            throw new DBReadException("Complete SQLite identity snapshot failed", e);
         }
         return registeredPlayers;
     }

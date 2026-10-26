@@ -207,6 +207,16 @@ public class PostgreSQL implements DbApi {
 
     @Override
     public HashMap<String, PlayerEntryV1> getAllData() {
+        try {
+            return getAllDataStrict();
+        } catch (DBReadException e) {
+            LogError("Error retrieving all data", e);
+            return new HashMap<>();
+        }
+    }
+
+    @Override
+    public HashMap<String, PlayerEntryV1> getAllDataStrict() {
         HashMap<String, PlayerEntryV1> players = new HashMap<>();
         try {
             reconnect();
@@ -222,8 +232,8 @@ public class PostgreSQL implements DbApi {
             }
             rs.close();
             stmt.close();
-        } catch (SQLException e) {
-            LogError("Error getting all data from PostgreSQL DB", e);
+        } catch (SQLException | RuntimeException e) {
+            throw new DBReadException("Complete PostgreSQL identity snapshot failed", e);
         }
         return players;
     }

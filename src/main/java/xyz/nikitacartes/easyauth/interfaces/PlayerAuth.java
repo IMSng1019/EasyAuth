@@ -71,6 +71,11 @@ public interface PlayerAuth {
     boolean easyAuth$isUsingMojangAccount();
 
     void easyAuth$setUsingMojangAccount();
+
+    /** Set only from authentication evidence attached to this player's network connection. */
+    void easyAuth$setExternalAuthentication(boolean authenticated, boolean relaxChatKeys);
+    boolean easyAuth$isExternalAuthenticated();
+    boolean easyAuth$relaxSourceChatKeys();
     /**
      * Gets the player's IP address on connection step.
      *

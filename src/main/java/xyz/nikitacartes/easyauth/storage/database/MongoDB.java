@@ -151,6 +151,16 @@ public class MongoDB implements DbApi {
 
     @Override
     public HashMap<String, PlayerEntryV1> getAllData() {
+        try {
+            return getAllDataStrict();
+        } catch (DBReadException e) {
+            LogError("Error retrieving all user data", e);
+            return new HashMap<>();
+        }
+    }
+
+    @Override
+    public HashMap<String, PlayerEntryV1> getAllDataStrict() {
         HashMap<String, PlayerEntryV1> registeredPlayers = new HashMap<>();
         try {
             collection.find().forEach(document -> {
@@ -159,10 +169,12 @@ public class MongoDB implements DbApi {
                 String username_lower = document.getString("username_lower");
                 String uuid = document.getString("uuid");
                 String data = document.getString("data");
-                registeredPlayers.put(username, new PlayerEntryV1(username, username_lower, uuid, data));
+                if (registeredPlayers.put(username, new PlayerEntryV1(username, username_lower, uuid, data)) != null) {
+                    throw new IllegalStateException("Duplicate legacy MongoDB username: " + username);
+                }
             });
         } catch (Exception e) {
-            LogError("Error retrieving all user data", e);
+            throw new DBReadException("Complete MongoDB identity snapshot failed", e);
         }
         return registeredPlayers;
     }

@@ -39,10 +39,12 @@ val awFile = when {
     else -> throw GradleException("Access widener is missing for Minecraft ${stonecutter.current.version})")
 }
 
+val runtimeJava = if (stonecutter.eval(stonecutter.current.version, "<1.20.5")) 17 else 25
 java {
-    sourceCompatibility = JavaVersion.VERSION_25
-    targetCompatibility = JavaVersion.VERSION_25
+    sourceCompatibility = JavaVersion.toVersion(runtimeJava)
+    targetCompatibility = JavaVersion.toVersion(runtimeJava)
 }
+kotlin.compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(runtimeJava.toString()))
 
 loom {
     splitEnvironmentSourceSets()
@@ -125,9 +127,29 @@ dependencies {
 
     implementation("org.spongepowered:configurate-hocon:${property("hocon_version")}")
     shadow("org.spongepowered:configurate-hocon:${property("hocon_version")}")
+
+    testImplementation(platform("org.junit:junit-bom:5.12.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(runtimeJava))
+    })
+}
+
+tasks.named<JavaExec>("runGameTest") {
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(runtimeJava))
+    })
 }
 
 tasks.shadowJar {
+    // Main/client resource generation can contribute the same metadata file twice.
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(rootProject.file("LICENSE"))
     relocate("org.spongepowered.configurate", "xyz.nikitacartes.shadow.configurate")
     relocate("com.typesafe.config", "xyz.nikitacartes.shadow.config")
     relocate("io.leangen.geantyref", "xyz.nikitacartes.shadow.geantyref")
@@ -146,7 +168,7 @@ tasks.remapJar {
 }
 
 tasks.jar {
-    from("LICENCE")
+    from(rootProject.file("LICENSE"))
 }
 
 tasks.withType<ProcessResources>().configureEach {
@@ -154,10 +176,15 @@ tasks.withType<ProcessResources>().configureEach {
 }
 
 tasks.processResources {
+    inputs.property("modVersion", dynamicVersion)
+    inputs.property("runtimeJava", runtimeJava)
+    inputs.property("supportedMinecraft", project.property("supported_minecraft_version"))
+    inputs.property("accessWidener", awFile)
     filesMatching("fabric.mod.json") {
         expand(
             mapOf(
                 "version" to dynamicVersion,
+                "java_version" to runtimeJava,
                 "supported_minecraft_version" to project.property("supported_minecraft_version"),
                 "accessWidener" to awFile
             )
@@ -182,7 +209,7 @@ tasks.named<Copy>("processGametestResources") {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-    options.release.set(25)
+    options.release.set(runtimeJava)
 }
 
 tasks.register<Copy>("collectJars") {

@@ -266,6 +266,16 @@ public class MySQL implements DbApi {
 
     @Override
     public HashMap<String, PlayerEntryV1> getAllData() {
+        try {
+            return getAllDataStrict();
+        } catch (DBReadException e) {
+            LogError("Error retrieving all data", e);
+            return new HashMap<>();
+        }
+    }
+
+    @Override
+    public HashMap<String, PlayerEntryV1> getAllDataStrict() {
         HashMap<String, PlayerEntryV1> registeredPlayers = new HashMap<>();
         try {
             reConnect();
@@ -281,8 +291,8 @@ public class MySQL implements DbApi {
             }
             resultSet.close();
             statement.close();
-        } catch (SQLException e) {
-            LogError("Error retrieving all data", e);
+        } catch (SQLException | RuntimeException e) {
+            throw new DBReadException("Complete MySQL identity snapshot failed", e);
         }
         return registeredPlayers;
     }

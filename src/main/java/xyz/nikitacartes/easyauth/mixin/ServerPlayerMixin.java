@@ -87,6 +87,12 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
     private boolean isUsingMojangAccount = false;
 
     @Unique
+    private boolean easyAuth$externalAuthenticated = false;
+
+    @Unique
+    private boolean easyAuth$relaxedSourceChatKeys = false;
+
+    @Unique
     private boolean wasVanished = false;
 
     @Unique
@@ -205,6 +211,7 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
     public void easyAuth$setSkipAuth() {
         easyAuth$setUsingMojangAccount();
         canSkipAuth = (this.player.getClass() != ServerPlayer.class) ||
+                easyAuth$externalAuthenticated ||
                 (config.floodgateAutoLogin && FloodgateApiHelper.isFloodgatePlayer(this.player)) ||
                 (config.premiumAutoLogin && easyAuth$isUsingMojangAccount() &&
                     !(config.enableGlobalPassword && extendedConfig.requireRegistrationForPremium && playerEntryV1.password.isEmpty()));
@@ -222,7 +229,24 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
 
     @Override
     public void easyAuth$setUsingMojangAccount() {
-        isUsingMojangAccount = server.usesAuthentication() && playerEntryV1.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE;
+        isUsingMojangAccount = !easyAuth$externalAuthenticated && server.usesAuthentication()
+                && playerEntryV1.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE;
+    }
+
+    @Override
+    public void easyAuth$setExternalAuthentication(boolean authenticated, boolean relaxChatKeys) {
+        easyAuth$externalAuthenticated = authenticated;
+        easyAuth$relaxedSourceChatKeys = authenticated && relaxChatKeys;
+    }
+
+    @Override
+    public boolean easyAuth$isExternalAuthenticated() {
+        return easyAuth$externalAuthenticated;
+    }
+
+    @Override
+    public boolean easyAuth$relaxSourceChatKeys() {
+        return easyAuth$relaxedSourceChatKeys;
     }
 
     /**
@@ -327,6 +351,8 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
         newPlayerAuth.easyAuth$setRootVehicle(oldPlayerAuth.easyAuth$getRootVehicle());
         newPlayerAuth.easyAuth$wasDead(oldPlayerAuth.easyAuth$wasDead());
         newPlayerAuth.easyAuth$canSkipAuth(oldPlayerAuth.easyAuth$canSkipAuth());
+        newPlayerAuth.easyAuth$setExternalAuthentication(oldPlayerAuth.easyAuth$isExternalAuthenticated(),
+                oldPlayerAuth.easyAuth$relaxSourceChatKeys());
         newPlayerAuth.easyAuth$setAuthenticated(oldPlayerAuth.easyAuth$isAuthenticated());
 
         newPlayerAuth.easyAuth$setPlayerEntryV1(oldPlayerAuth.easyAuth$getPlayerEntryV1());

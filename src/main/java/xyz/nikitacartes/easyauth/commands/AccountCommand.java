@@ -12,6 +12,7 @@ import net.minecraft.server.level.ServerPlayer;
 import xyz.nikitacartes.easyauth.dialog.AuthDialogs;
 import xyz.nikitacartes.easyauth.integrations.EasyAuthPermissions;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.utils.AuthHelper;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
@@ -152,6 +153,7 @@ public class AccountCommand {
     public static int unregister(CommandSourceStack source, String pass) throws CommandSyntaxException {
         // Getting the player who send the command
         ServerPlayer player = source.getPlayerOrException();
+        if (MultiAuth.rejectIdentityEdit(source, StoneCutterUtils.getUsername(player))) return 0;
         PlayerAuth playerAuth = (PlayerAuth) player;
 
         if (config.enableGlobalPassword && !config.singleUseGlobalPassword) {
@@ -241,6 +243,7 @@ public class AccountCommand {
      */
     private static int markAsOnline(CommandSourceStack source, String password) throws CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
+        if (MultiAuth.rejectIdentityEdit(source, StoneCutterUtils.getUsername(player))) return 0;
         PlayerAuth playerAuth = (PlayerAuth) player;
 
         THREADPOOL.submit(() -> {

@@ -73,6 +73,13 @@ public interface DbApi {
     HashMap<String, PlayerEntryV1> getAllData();
 
     /**
+     * Complete legacy identity snapshot for security-sensitive collision checks.
+     * Unlike the historical export method, any read failure throws {@link DBReadException};
+     * an incomplete snapshot must never be treated as available usernames or UUIDs.
+     */
+    HashMap<String, PlayerEntryV1> getAllDataStrict();
+
+    /**
      * Counts the number of registered accounts associated with the given IP address.
      *
      * @param ipAddress the IP address to check
