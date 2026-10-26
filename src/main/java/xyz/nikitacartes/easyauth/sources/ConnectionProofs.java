@@ -9,10 +9,16 @@ import java.util.WeakHashMap;
 public final class ConnectionProofs<C> {
     private final Map<C, Proof> connections = new WeakHashMap<>();
 
-    public record Proof(UUID uuid, String name, boolean custom, boolean relaxChatKeys) {
+    public record Proof(UUID uuid, String name, boolean custom, boolean relaxChatKeys,
+                        String sourceId, SourceType sourceType) {
         public Proof {
             Objects.requireNonNull(uuid);
             Objects.requireNonNull(name);
+            Objects.requireNonNull(sourceId);
+            Objects.requireNonNull(sourceType);
+            if (sourceId.isBlank() || custom != (sourceType != SourceType.OFFICIAL)) {
+                throw new IllegalArgumentException("Authentication proof source is inconsistent");
+            }
         }
 
         boolean matches(UUID id, String profileName) {

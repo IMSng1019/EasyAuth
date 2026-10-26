@@ -1,5 +1,6 @@
 package xyz.nikitacartes.easyauth.sources;
 
+import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -83,5 +84,106 @@ class SourcesConfigTest {
         assertFalse(load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"enabled\":false}]").usesLegacyAuthentication());
         assertFalse(load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":1000}]").usesLegacyAuthentication());
         assertTrue(load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000,\"priority\":0},{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"enabled\":false,\"priority\":1,\"apiRoot\":\"https://skin.test\"}]").usesLegacyAuthentication());
+    }
+
+    private SourcesConfig loadPrefixes(String rootFields, String sources) throws Exception {
+        Path file = temp.resolve("sources.json");
+        Files.writeString(file, "{\"configVersion\":1," + rootFields + "\"sources\":" + sources + "}");
+        return SourcesConfig.load(file);
+    }
+
+    private SourcesConfig loadPrefix(String key, String value) throws Exception {
+        JsonObject field = new JsonObject();
+        field.addProperty(key, value);
+        String json = field.toString();
+        String contents = json.substring(1, json.length() - 1);
+        if (key.equals("namePrefix")) {
+            return load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000," + contents + "}]");
+        }
+        return loadPrefixes(contents + ",", "[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000}]");
+    }
+
+    @Test void omittedNamePrefixesRemainEmptyForEveryChannel() throws Exception {
+        SourcesConfig config = load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000}]");
+        assertEquals("", config.sources().get(0).namePrefix());
+        assertEquals("", config.namePrefix("official"));
+        assertEquals("", config.namePrefix("missing"));
+        assertEquals("", config.officialNamePrefix());
+        assertEquals("", config.offlineNamePrefix());
+        assertEquals("", config.floodgateNamePrefix());
+        assertTrue(config.usesLegacyAuthentication());
+        assertEquals("", SourcesConfig.defaults().officialNamePrefix());
+    }
+
+    @Test void explicitEmptyNamePrefixesAreValid() throws Exception {
+        SourcesConfig config = loadPrefixes("\"offlineNamePrefix\":\"\",\"floodgateNamePrefix\":\"\",",
+                "[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000,\"namePrefix\":\"\"}]");
+        assertEquals("", config.officialNamePrefix());
+        assertEquals("", config.offlineNamePrefix());
+        assertEquals("", config.floodgateNamePrefix());
+        assertTrue(config.usesLegacyAuthentication());
+    }
+
+    @Test void unicodeAndSpacingArePreservedWithoutFormattingParsing() throws Exception {
+        SourcesConfig config = loadPrefixes("\"offlineNamePrefix\":\"  离线  \",\"floodgateNamePrefix\":\"[基岩🎮] \",",
+                "[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000,\"namePrefix\":\"<red>[正版]</red> \"}]");
+        assertEquals("<red>[正版]</red> ", config.namePrefix("official"));
+        assertEquals("  离线  ", config.offlineNamePrefix());
+        assertEquals("[基岩🎮] ", config.floodgateNamePrefix());
+        assertTrue(config.usesLegacyAuthentication(), "Display-only configuration must not enable managed authentication");
+        assertFalse(config.hasCustomSources());
+    }
+
+    @Test void prefixesAreResolvedBySourceIdIncludingDisabledSources() throws Exception {
+        SourcesConfig config = load("[{\"id\":\"mojang\",\"type\":\"OFFICIAL\",\"priority\":0,\"namePrefix\":\"[M] \"},"
+                + "{\"id\":\"campus-a\",\"type\":\"SKIN_SITE\",\"priority\":1,\"apiRoot\":\"https://a.test\",\"namePrefix\":\"[A] \"},"
+                + "{\"id\":\"campus-b\",\"type\":\"SKIN_SITE\",\"priority\":2,\"enabled\":false,\"apiRoot\":\"https://b.test\",\"namePrefix\":\"[B] \"}]");
+        assertEquals("[M] ", config.officialNamePrefix());
+        assertEquals("[A] ", config.namePrefix("campus-a"));
+        assertEquals("[B] ", config.namePrefix("campus-b"));
+        assertEquals("", config.namePrefix("unknown"));
+        assertEquals("", load("[]").officialNamePrefix());
+    }
+
+    @Test void disabledSourcePrefixDoesNotChangeLegacyAuthentication() throws Exception {
+        SourcesConfig config = load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0,\"timeoutMillis\":2000,\"namePrefix\":\"[正版] \"},"
+                + "{\"id\":\"campus\",\"type\":\"SKIN_SITE\",\"priority\":1,\"enabled\":false,\"apiRoot\":\"https://campus.test\",\"namePrefix\":\"[高校] \"}]");
+        assertEquals("[高校] ", config.namePrefix("campus"));
+        assertTrue(config.usesLegacyAuthentication());
+    }
+
+    @Test void namePrefixLengthCountsUnicodeCodePoints() throws Exception {
+        String maximum = "🎮".repeat(64);
+        for (String key : new String[]{"namePrefix", "offlineNamePrefix", "floodgateNamePrefix"}) {
+            SourcesConfig config = loadPrefix(key, maximum);
+            String value = switch (key) {
+                case "namePrefix" -> config.officialNamePrefix();
+                case "offlineNamePrefix" -> config.offlineNamePrefix();
+                default -> config.floodgateNamePrefix();
+            };
+            assertEquals(maximum, value);
+            assertThrows(IllegalArgumentException.class, () -> loadPrefix(key, maximum + "a"));
+        }
+    }
+
+    @Test void namePrefixesRejectControlsAndUnpairedSurrogates() {
+        for (String key : new String[]{"namePrefix", "offlineNamePrefix", "floodgateNamePrefix"}) {
+            for (String value : new String[]{"line\\n", "tab\\t", "null\\u0000", "control\\u0085", "high\\uD800", "low\\uDC00"}) {
+                String field = "\"" + key + "\":\"" + value + "\"";
+                if (key.equals("namePrefix")) {
+                    assertThrows(IllegalArgumentException.class, () -> load("[{\"id\":\"official\",\"type\":\"OFFICIAL\"," + field + "}]"));
+                } else {
+                    assertThrows(IllegalArgumentException.class, () -> loadPrefixes(field + ",", "[]"));
+                }
+            }
+        }
+    }
+
+    @Test void namePrefixesRejectNonStringValues() {
+        for (String value : new String[]{"42", "true", "null", "{}", "[]"}) {
+            assertThrows(IllegalArgumentException.class, () -> load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"namePrefix\":" + value + "}]"));
+            assertThrows(IllegalArgumentException.class, () -> loadPrefixes("\"offlineNamePrefix\":" + value + ",", "[]"));
+            assertThrows(IllegalArgumentException.class, () -> loadPrefixes("\"floodgateNamePrefix\":" + value + ",", "[]"));
+        }
     }
 }

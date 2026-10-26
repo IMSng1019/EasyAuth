@@ -6,7 +6,7 @@
 
 ## 启用
 
-1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.1.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
+1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.2.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
 2. 初次启动会生成 `config/EasyAuth/sources.json`。默认只配置官方源，走原 EasyAuth 登录行为，Union/皮肤站不会自动开启。
 3. 启用多源前，停服备份世界和原认证数据库。修改 `server.properties`：
 
@@ -20,6 +20,24 @@
 6. 执行 `/auth sources reload`。该命令只验证并原子替换认证源配置，错误配置保留旧快照；正在认证的连接继续使用它开始时的快照。修改服务器自身 properties 后需重启。
 
 仅 1.20.4 构建启用新认证链路；其他版本若尝试启用会明确失败，默认旧行为仍可构建。默认配置保留上游的正版自动登录、密码、会话、2FA、存储后端、Floodgate、LuckPerms 和 companion 机制。
+
+## 按登录渠道显示名字前缀
+
+从 `4.0.0-multisource.2` 起，`sources.json` 支持每个渠道设置独立的显示前缀。前缀显示在**原版聊天和 Tab 玩家名单**中，例如 `[MUA] Alice`；真实账号名仍为 `Alice`，命令仍以真实账号名选择玩家。
+
+| 配置位置 | 示例 | 使用渠道 |
+| --- | --- | --- |
+| OFFICIAL 源的 `namePrefix` | `"[正版] "` | 官方认证 |
+| UNION 源的 `namePrefix` | `"[MUA] "` | 对应 Union 源 |
+| 各 SKIN_SITE 源的 `namePrefix` | `"[皮肤站A] "` | 对应皮肤站，可逐站设置 |
+| 根级 `offlineNamePrefix` | `"[离线] "` | EasyAuth 离线／密码登录 |
+| 根级 `floodgateNamePrefix` | `"[基岩] "` | Floodgate 玩家 |
+
+所有前缀默认 `""`，旧配置无需修改。前缀是普通文字，可以使用中文、符号和空格；空格需要自己写在前缀末尾。最多 64 个 Unicode 字符，不接受换行、控制字符或损坏的 Unicode。
+
+修改后执行 `/auth sources reload` 即可更新在线玩家的显示；重生后也保留所属渠道。前缀依据已验证的登录来源选择，多个皮肤站不会共用同一个标识。已停用但仍保留在配置中的来源，可继续为已在线玩家提供其对应前缀；删除来源条目后该来源的显示前缀为空。
+
+前缀不参与认证，不改变账号名、UUID、密码、皮肤或 playerdata，也不占用 scoreboard 队伍；原有队伍与名字组件样式保留。**头顶名牌不在这个显示功能范围内**。只设置前缀不会开启多源认证或要求默认离线服务器切换 online-mode。自定义聊天或 Tab 模组若自行替换显示组件，最终显示取决于它们的兼容行为。
 
 ## 1.20.4 登录路由的必要选择
 

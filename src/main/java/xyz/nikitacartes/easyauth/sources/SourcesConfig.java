@@ -32,6 +32,8 @@ public final class SourcesConfig {
               "relaxCustomChatKeys": false,
               "newPlayerAuth": "AUTO",
               "offlineNames": [],
+              "offlineNamePrefix": "",
+              "floodgateNamePrefix": "",
               "sources": [
                 {
                   "id": "official",
@@ -39,7 +41,8 @@ public final class SourcesConfig {
                   "enabled": true,
                   "priority": 0,
                   "timeoutMillis": 2000,
-                  "retries": 0
+                  "retries": 0,
+                  "namePrefix": ""
                 }
               ]
             }
@@ -51,23 +54,28 @@ public final class SourcesConfig {
     private final boolean relaxCustomChatKeys;
     private final NewPlayerAuth newPlayerAuth;
     private final List<Pattern> offlineNames;
+    private final String offlineNamePrefix;
+    private final String floodgateNamePrefix;
 
     /** Vanilla hello packets cannot distinguish a new offline player from a skin-site v3 player. */
     public enum NewPlayerAuth { AUTO, EXTERNAL }
 
     private SourcesConfig(List<Source> sources, int parallelism, int overallTimeoutMillis, boolean relaxCustomChatKeys,
-                          NewPlayerAuth newPlayerAuth, List<Pattern> offlineNames) {
+                          NewPlayerAuth newPlayerAuth, List<Pattern> offlineNames,
+                          String offlineNamePrefix, String floodgateNamePrefix) {
         this.sources = List.copyOf(sources);
         this.parallelism = parallelism;
         this.overallTimeoutMillis = overallTimeoutMillis;
         this.relaxCustomChatKeys = relaxCustomChatKeys;
         this.newPlayerAuth = newPlayerAuth;
         this.offlineNames = List.copyOf(offlineNames);
+        this.offlineNamePrefix = offlineNamePrefix;
+        this.floodgateNamePrefix = floodgateNamePrefix;
     }
 
     public record Source(String id, SourceType type, boolean enabled, int priority,
                          URI hasJoinedUrl, String mappedUrl, String subjectIdField,
-                         String createdAtField, int timeoutMillis, int retries) { }
+                         String createdAtField, int timeoutMillis, int retries, String namePrefix) { }
 
     public static SourcesConfig defaults() {
         return parse(DEFAULT_JSON);
@@ -96,7 +104,8 @@ public final class SourcesConfig {
             JsonElement parsed = JsonParser.parseString(json);
             if (!parsed.isJsonObject()) throw invalid("root must be an object");
             JsonObject root = parsed.getAsJsonObject();
-            known(root, Set.of("configVersion", "parallelism", "overallTimeoutMillis", "relaxCustomChatKeys", "newPlayerAuth", "offlineNames", "sources"), "root");
+            known(root, Set.of("configVersion", "parallelism", "overallTimeoutMillis", "relaxCustomChatKeys", "newPlayerAuth",
+                    "offlineNames", "offlineNamePrefix", "floodgateNamePrefix", "sources"), "root");
             if (integer(root, "configVersion", -1) != 1) throw invalid("configVersion must be 1");
             int parallelism = bounded(root, "parallelism", 4, 1, 16);
             int budget = bounded(root, "overallTimeoutMillis", 6000, 100, 30000);
@@ -109,6 +118,8 @@ public final class SourcesConfig {
                 throw invalid("newPlayerAuth must be AUTO or EXTERNAL");
             }
             List<Pattern> offlineNames = offlineNames(root);
+            String offlineNamePrefix = prefix(root, "offlineNamePrefix");
+            String floodgateNamePrefix = prefix(root, "floodgateNamePrefix");
             if (!root.has("sources") || !root.get("sources").isJsonArray()) throw invalid("sources must be an array");
             JsonArray array = root.getAsJsonArray("sources");
             if (array.size() > 32) throw invalid("at most 32 sources may be configured");
@@ -120,7 +131,7 @@ public final class SourcesConfig {
                 if (!element.isJsonObject()) throw invalid("each source must be an object");
                 JsonObject obj = element.getAsJsonObject();
                 known(obj, Set.of("id", "type", "enabled", "priority", "apiRoot", "hasJoinedUrl", "mappedUrl",
-                        "subjectIdField", "createdAtField", "timeoutMillis", "retries", "unionMode", "unionServers"), "source");
+                        "subjectIdField", "createdAtField", "timeoutMillis", "retries", "unionMode", "unionServers", "namePrefix"), "source");
                 String id = required(obj, "id");
                 if (!id.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")) throw invalid("invalid source id: " + id);
                 if (id.equalsIgnoreCase("offline") || id.equalsIgnoreCase("floodgate") || id.startsWith("legacy")) {
@@ -138,6 +149,7 @@ public final class SourcesConfig {
                 if (!priorities.add(priority)) throw invalid("duplicate source priority: " + priority);
                 int timeout = bounded(obj, "timeoutMillis", 1500, 100, 10000);
                 int retries = bounded(obj, "retries", 0, 0, 3);
+                String namePrefix = prefix(obj, "namePrefix");
                 String rootUrl = optional(obj, "apiRoot");
                 String joinedUrl = optional(obj, "hasJoinedUrl");
                 String mapping = optional(obj, "mappedUrl");
@@ -184,7 +196,7 @@ public final class SourcesConfig {
                 }
                 if (subject != null) validateField(subject);
                 if (created != null) validateField(created);
-                sources.add(new Source(id, type, enabled, priority, validateUrl(joinedUrl, false), mapping, subject, created, timeout, retries));
+                sources.add(new Source(id, type, enabled, priority, validateUrl(joinedUrl, false), mapping, subject, created, timeout, retries, namePrefix));
             }
             if (officialCount > 1) throw invalid("only one OFFICIAL source is allowed");
             sources.sort(Comparator.comparingInt(Source::priority));
@@ -192,7 +204,7 @@ public final class SourcesConfig {
             for (Source source : enabled) {
                 if (source.type() == SourceType.OFFICIAL && source != enabled.get(0)) throw invalid("OFFICIAL must have the highest priority (smallest number)");
             }
-            return new SourcesConfig(sources, parallelism, budget, relax, newPlayerAuth, offlineNames);
+            return new SourcesConfig(sources, parallelism, budget, relax, newPlayerAuth, offlineNames, offlineNamePrefix, floodgateNamePrefix);
         } catch (com.google.gson.JsonParseException | IllegalStateException | UnsupportedOperationException e) {
             throw invalid("malformed JSON or field type: " + e.getMessage());
         }
@@ -253,6 +265,20 @@ public final class SourcesConfig {
         for (String key : obj.keySet()) if (!fields.contains(key)) throw invalid("unknown " + location + " field: " + key);
     }
 
+    /** Display text only: retain spacing and Unicode, without interpreting color or markup syntax. */
+    private static String prefix(JsonObject obj, String key) {
+        if (!obj.has(key)) return "";
+        JsonElement value = obj.get(key);
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) throw invalid(key + " must be a string");
+        String text = value.getAsString();
+        if (text.codePointCount(0, text.length()) > 64) throw invalid(key + " must be at most 64 Unicode code points");
+        if (text.codePoints().anyMatch(codePoint -> Character.isISOControl(codePoint)
+                || (codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE))) {
+            throw invalid(key + " must not contain control characters or unpaired surrogates");
+        }
+        return text;
+    }
+
     private static String optional(JsonObject obj, String key) {
         if (!obj.has(key)) return null;
         JsonElement value = obj.get(key);
@@ -300,8 +326,19 @@ public final class SourcesConfig {
     public NewPlayerAuth newPlayerAuth() { return newPlayerAuth; }
     public boolean isExplicitOfflineName(String name) { return offlineNames.stream().anyMatch(pattern -> pattern.matcher(name).matches()); }
     public boolean hasCustomSources() { return sources.stream().anyMatch(source -> source.enabled() && source.type() != SourceType.OFFICIAL); }
+    public String offlineNamePrefix() { return offlineNamePrefix; }
+    public String floodgateNamePrefix() { return floodgateNamePrefix; }
 
-    /** Preserve the original EasyAuth path only while all effective settings match its default. */
+    /** Include disabled sources: an established connection retains the source that verified it. */
+    public String namePrefix(String sourceId) {
+        return sources.stream().filter(source -> source.id().equals(sourceId)).map(Source::namePrefix).findFirst().orElse("");
+    }
+
+    public String officialNamePrefix() {
+        return sources.stream().filter(source -> source.type() == SourceType.OFFICIAL).map(Source::namePrefix).findFirst().orElse("");
+    }
+
+    /** Display-only prefixes do not change whether the original authentication flow remains active. */
     public boolean usesLegacyAuthentication() {
         if (parallelism != 4 || overallTimeoutMillis != 6000 || relaxCustomChatKeys
                 || newPlayerAuth != NewPlayerAuth.AUTO || !offlineNames.isEmpty()) return false;

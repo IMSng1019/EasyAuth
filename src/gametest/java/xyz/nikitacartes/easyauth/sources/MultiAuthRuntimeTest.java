@@ -9,12 +9,15 @@ import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import com.mojang.authlib.GameProfile;
 import com.sun.net.httpserver.HttpServer;
 import net.minecraft.core.UUIDUtil;
+import net.minecraft.ChatFormatting;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.Connection;
 import net.minecraft.network.PacketListener;
+import net.minecraft.network.PacketSendListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.login.ClientboundHelloPacket;
 import net.minecraft.network.protocol.login.ServerboundHelloPacket;
 import net.minecraft.network.protocol.login.ServerboundKeyPacket;
@@ -25,9 +28,11 @@ import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.server.network.ServerLoginPacketListenerImpl;
 import net.minecraft.util.Crypt;
+import net.minecraft.world.scores.PlayerTeam;
 import xyz.nikitacartes.easyauth.EasyAuth;
 import xyz.nikitacartes.easyauth.event.AuthEventHandler;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
+import xyz.nikitacartes.easyauth.integrations.SourceNameDisplay;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
 
@@ -89,11 +94,13 @@ public class MultiAuthRuntimeTest {
         SourcesConfig before = MultiAuth.snapshot();
         MinecraftServer server = context.getLevel().getServer();
         boolean oldOnlineMode = server.usesAuthentication();
+        String oldSecureProfile = EasyAuth.serverProp.getProperty("enforce-secure-profile");
         Path configFile = Files.createTempFile("easyauth-runtime-", ".json");
         try {
+            EasyAuth.serverProp.setProperty("enforce-secure-profile", "false");
             int port = fixture.getAddress().getPort();
             Files.writeString(configFile, "{\"configVersion\":1,\"newPlayerAuth\":\"EXTERNAL\",\"relaxCustomChatKeys\":true,\"sources\":[{"
-                    + "\"id\":\"gametest-union\",\"type\":\"UNION\",\"priority\":1,"
+                    + "\"id\":\"gametest-union\",\"type\":\"UNION\",\"priority\":1,\"namePrefix\":\"[MUA] \","
                     + "\"hasJoinedUrl\":\"http://127.0.0.1:" + port + "/joined\","
                     + "\"mappedUrl\":\"http://127.0.0.1:" + port + "/mapped/{uuid}\"}]}");
             SourcesConfig sources = SourcesConfig.load(configFile);
@@ -150,6 +157,84 @@ public class MultiAuthRuntimeTest {
             check(playerAuth.easyAuth$isExternalAuthenticated() && !playerAuth.easyAuth$isUsingMojangAccount(), "External authentication was confused with Mojang trust");
             check(playerAuth.easyAuth$relaxSourceChatKeys(), "Custom chat-key policy did not follow the verified connection");
             check(MultiAuth.consumeProof(authenticated, profile) == null, "Connection proof was replayed");
+            check(player.getDisplayName().getString().equals("[MUA] " + name), "Union chat prefix was not applied");
+            check(player.getTabListDisplayName() != null && player.getTabListDisplayName().getString().equals("[MUA] " + name), "Union TAB prefix was missing or duplicated");
+            check(player.getScoreboardName().equals(name) && StoneCutterUtils.getName(player.getGameProfile()).equals(name), "Display prefix changed the real player name");
+            check(player.getUUID().equals(localUuid) && EasyAuth.DB.getUserData(name).uuid.equals(localUuid), "Display prefix changed persisted identity");
+            check(playerAuth.easyAuth$getAuthenticationChannel() == AuthenticationChannel.UNION
+                    && "gametest-union".equals(playerAuth.easyAuth$getAuthenticationSourceId()), "Display channel did not come from the verified source");
+
+            String originalConfig = Files.readString(configFile);
+            Files.writeString(configFile, originalConfig.replace("[MUA] ", "[Campus] "));
+            MultiAuth.install(SourcesConfig.load(configFile));
+            check(player.getDisplayName().getString().equals("[Campus] " + name), "Online chat prefix did not refresh");
+            check(player.getTabListDisplayName().getString().equals("[Campus] " + name), "Online TAB prefix did not refresh or doubled");
+            Component rankedName = Component.literal("[Rank] " + name).withStyle(ChatFormatting.GOLD);
+            Component decorated = SourceNameDisplay.tabName(player, rankedName);
+            check(decorated.getString().equals("[Campus] [Rank] " + name), "Existing TAB decoration was lost");
+            check(decorated.getSiblings().get(0).getStyle().getColor().equals(rankedName.getStyle().getColor()), "Existing TAB style was lost");
+            check(rankedName.getString().equals("[Rank] " + name), "Display prefix mutated another mod's Component");
+
+            Files.writeString(configFile, originalConfig.replace("\"priority\":1", "\"priority\":1,\"enabled\":false"));
+            MultiAuth.install(SourcesConfig.load(configFile));
+            check(player.getDisplayName().getString().equals("[MUA] " + name), "Disabling a provider relabeled an established session");
+            Files.writeString(configFile, originalConfig.replace("gametest-union", "other-union"));
+            MultiAuth.install(SourcesConfig.load(configFile));
+            check(player.getDisplayName().getString().equals(name) && player.getTabListDisplayName() == null, "Missing source inherited another provider's prefix");
+
+            Files.writeString(configFile, originalConfig.replace("[MUA] ", ""));
+            MultiAuth.install(SourcesConfig.load(configFile));
+            check(player.getDisplayName().getString().equals(name) && player.getTabListDisplayName() == null, "Clearing a prefix did not restore vanilla display");
+            check(SourceNameDisplay.tabName(player, rankedName) == rankedName
+                    && SourceNameDisplay.chatName(player, rankedName) == rankedName, "Empty prefix did not preserve the original Component");
+            check(playerAuth.easyAuth$isAuthenticated() && playerAuth.easyAuth$isExternalAuthenticated()
+                    && player.getUUID().equals(localUuid) && player.getScoreboardName().equals(name), "Display reload changed identity or authentication");
+            MultiAuth.install(sources);
+
+            // Exercise the actual reload command path and the packet sent to an online player.
+            String diskConfig = Files.readString(MultiAuth.configPath());
+            server.getPlayerList().getPlayers().add(player);
+            PlayerTeam testTeam = null;
+            try {
+                Files.writeString(MultiAuth.configPath(), originalConfig.replace("[MUA] ", "[Live] "));
+                authenticated.lastPlayerInfo = null;
+                check(MultiAuth.reload(server.createCommandSourceStack()) == 1, "Source-only prefix reload failed");
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName()
+                        .getString().equals("[Live] " + name), "Reload did not broadcast the updated TAB name");
+
+                Files.writeString(MultiAuth.configPath(), originalConfig.replace("[MUA] ", ""));
+                authenticated.lastPlayerInfo = null;
+                check(MultiAuth.reload(server.createCommandSourceStack()) == 1, "Empty-prefix reload failed");
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName() == null,
+                        "Clearing prefix did not broadcast the vanilla null TAB value");
+
+                MultiAuth.install(sources);
+                testTeam = server.getScoreboard().addPlayerTeam("src_" + suffix);
+                testTeam.setPlayerPrefix(Component.literal("[Rank] ").withStyle(ChatFormatting.GOLD));
+                authenticated.lastPlayerInfo = null;
+                server.getScoreboard().addPlayerToTeam(name, testTeam);
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName()
+                        .getString().equals("[MUA] [Rank] " + name), "Joining a team did not refresh prefixed TAB name");
+                authenticated.lastPlayerInfo = null;
+                testTeam.setPlayerPrefix(Component.literal("[NewRank] "));
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName()
+                        .getString().equals("[MUA] [NewRank] " + name), "Team prefix update left the TAB name stale");
+                authenticated.lastPlayerInfo = null;
+                server.getScoreboard().removePlayerFromTeam(name, testTeam);
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName()
+                        .getString().equals("[MUA] " + name), "Leaving a team left its TAB decoration behind");
+                server.getScoreboard().addPlayerToTeam(name, testTeam);
+                authenticated.lastPlayerInfo = null;
+                server.getScoreboard().removePlayerTeam(testTeam);
+                testTeam = null;
+                check(authenticated.lastPlayerInfo != null && authenticated.lastPlayerInfo.entries().get(0).displayName()
+                        .getString().equals("[MUA] " + name), "Deleting a team left its TAB decoration behind");
+            } finally {
+                if (testTeam != null) server.getScoreboard().removePlayerTeam(testTeam);
+                server.getPlayerList().getPlayers().remove(player);
+                Files.writeString(MultiAuth.configPath(), diskConfig);
+                MultiAuth.install(sources);
+            }
 
             providerUuid.set(UUID.randomUUID());
             Connection remapped = new Connection(PacketFlow.SERVERBOUND);
@@ -176,6 +261,8 @@ public class MultiAuthRuntimeTest {
         } finally {
             MultiAuth.install(before);
             server.setUsesAuthentication(oldOnlineMode);
+            if (oldSecureProfile == null) EasyAuth.serverProp.remove("enforce-secure-profile");
+            else EasyAuth.serverProp.setProperty("enforce-secure-profile", oldSecureProfile);
             fixture.stop(0);
             Files.deleteIfExists(configFile);
         }
@@ -207,12 +294,17 @@ public class MultiAuthRuntimeTest {
         private ClientboundHelloPacket challenge;
         private boolean encrypted;
         private volatile String disconnected;
+        private ClientboundPlayerInfoUpdatePacket lastPlayerInfo;
 
         TestConnection() { super(PacketFlow.SERVERBOUND); }
 
         @Override public void send(Packet<?> packet) {
             if (packet instanceof ClientboundHelloPacket hello) challenge = hello;
+            if (packet instanceof ClientboundPlayerInfoUpdatePacket info) lastPlayerInfo = info;
         }
+
+        @Override public void send(Packet<?> packet, PacketSendListener listener) { send(packet); }
+        @Override public void send(Packet<?> packet, PacketSendListener listener, boolean flush) { send(packet); }
 
         @Override public boolean isMemoryConnection() { return false; }
         @Override public void setListener(PacketListener listener) { }

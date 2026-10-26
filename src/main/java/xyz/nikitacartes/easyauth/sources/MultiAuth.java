@@ -11,6 +11,7 @@ import net.minecraft.world.level.storage.LevelResource;
 import xyz.nikitacartes.easyauth.EasyAuth;
 import xyz.nikitacartes.easyauth.config.ExtendedConfigV1;
 import xyz.nikitacartes.easyauth.config.ProxyConfigV1;
+import xyz.nikitacartes.easyauth.integrations.SourceNameDisplay;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
 import xyz.nikitacartes.easyauth.utils.PlayersCache;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
@@ -167,6 +168,7 @@ public final class MultiAuth {
             validate(candidate, extendedConfig);
             validateServer(candidate, source.getServer());
             install(candidate);
+            SourceNameDisplay.refresh(source.getServer());
             source.sendSystemMessage(Component.literal("[EasyAuth] Authentication sources reloaded."));
             return 1;
         } catch (Exception e) {
@@ -199,7 +201,7 @@ public final class MultiAuth {
         GameProfile profile = prepareVerified(server, identity);
         PROOFS.put(connection, new ConnectionProofs.Proof(StoneCutterUtils.getId(profile),
                 StoneCutterUtils.getName(profile), identity.type() != SourceType.OFFICIAL,
-                snapshot.relaxCustomChatKeys()));
+                snapshot.relaxCustomChatKeys(), identity.sourceId(), identity.type()));
         return profile;
     }
 

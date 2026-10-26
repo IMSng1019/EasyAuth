@@ -13,6 +13,7 @@ import xyz.nikitacartes.easyauth.integrations.LuckPermsIntegration;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
 import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.sources.SourcesConfig;
+import xyz.nikitacartes.easyauth.integrations.SourceNameDisplay;
 
 import java.io.File;
 import java.io.FileReader;
@@ -230,6 +231,7 @@ public class EasyAuth {
             }
         }
 
+        SourceNameDisplay.refresh(server);
         Commands serverCommandManager = server.getCommands();
         try {
             Field literalsField = CommandNode.class.getDeclaredField("literals");

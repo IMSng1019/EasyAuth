@@ -8,6 +8,7 @@ import net.minecraft.network.Connection;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.AuthenticationChannel;
 import xyz.nikitacartes.easyauth.utils.LastLocation;
 
 import java.util.UUID;
@@ -76,6 +77,10 @@ public interface PlayerAuth {
     void easyAuth$setExternalAuthentication(boolean authenticated, boolean relaxChatKeys);
     boolean easyAuth$isExternalAuthenticated();
     boolean easyAuth$relaxSourceChatKeys();
+    /** Display provenance captured once from this connection, separate from authentication flags. */
+    void easyAuth$setAuthenticationSource(AuthenticationChannel channel, String sourceId);
+    AuthenticationChannel easyAuth$getAuthenticationChannel();
+    String easyAuth$getAuthenticationSourceId();
     /**
      * Gets the player's IP address on connection step.
      *

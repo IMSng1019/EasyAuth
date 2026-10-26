@@ -37,6 +37,7 @@ import xyz.nikitacartes.easyauth.integrations.VanishIntegration;
 import xyz.nikitacartes.easyauth.protocol.ClientModProtocol;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
 import xyz.nikitacartes.easyauth.sources.ConnectionProofs;
+import xyz.nikitacartes.easyauth.sources.AuthenticationChannel;
 import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.storage.database.DBReadException;
 import xyz.nikitacartes.easyauth.integrations.FloodgateApiHelper;
@@ -373,6 +374,18 @@ public class AuthEventHandler {
 
         playerAuth.easyAuth$setIpAddress(connection);
         playerAuth.easyAuth$setSkipAuth();
+
+        // Capture the actual login channel once. Later account/config changes affect only the
+        // configured display text, never this session's origin or authentication state.
+        if (FloodgateApiHelper.isFloodgatePlayer(player)) {
+            playerAuth.easyAuth$setAuthenticationSource(AuthenticationChannel.FLOODGATE, null);
+        } else if (sourceProof != null) {
+            playerAuth.easyAuth$setAuthenticationSource(AuthenticationChannel.valueOf(sourceProof.sourceType().name()),
+                    sourceProof.sourceId());
+        } else {
+            playerAuth.easyAuth$setAuthenticationSource(playerAuth.easyAuth$isUsingMojangAccount()
+                    ? AuthenticationChannel.OFFICIAL : AuthenticationChannel.OFFLINE, null);
+        }
 
         if (config.vanishUntilAuth) {
             ((PlayerAuth) player).easyAuth$wasVanished(VanishIntegration.isVanished(player));

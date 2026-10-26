@@ -12,7 +12,7 @@ with zipfile.ZipFile(jar) as archive:
     assert not duplicates, f"Duplicate entries: {duplicates}"
     metadata = json.loads(archive.read("fabric.mod.json"))
     assert metadata["id"] == "easyauth"
-    assert metadata["version"] == "4.0.0-multisource.1", metadata["version"]
+    assert metadata["version"] == "4.0.0-multisource.2", metadata["version"]
     assert metadata["depends"]["java"] == ">=17", metadata["depends"]
     assert "1.20.3" in metadata["depends"]["minecraft"]
     assert "MIT License" in archive.read("LICENSE").decode("utf-8")
@@ -24,6 +24,8 @@ with zipfile.ZipFile(jar) as archive:
             assert major <= 61, f"{name} requires newer Java (class major {major})"
     mixins = json.loads(archive.read("easyauth.mixins.json"))
     assert "ServerLoginPacketListenerImplMixin" in mixins["server"]
+    assert "PlayerDisplayNameMixin" in mixins["server"]
+    assert "ServerScoreboardDisplayNameMixin" in mixins["server"]
     login_mixin = archive.read("xyz/nikitacartes/easyauth/mixin/ServerLoginPacketListenerImplMixin.class")
     assert b"net/minecraft/class_3248" in login_mixin, "Minecraft login listener was not remapped"
     assert b"net/minecraft/server/network/ServerLoginPacketListenerImpl" not in login_mixin

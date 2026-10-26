@@ -5,10 +5,13 @@
   "newPlayerAuth": "EXTERNAL",
   "offlineNames": ["^Offline_[A-Za-z0-9_]{1,8}$"],
   "relaxCustomChatKeys": true,
+  "offlineNamePrefix": "[离线] ",
+  "floodgateNamePrefix": "[基岩] ",
   "sources": [
     {
       "id": "official",
       "type": "OFFICIAL",
+      "namePrefix": "[正版] ",
       "enabled": true,
       "priority": 0,
       "timeoutMillis": 2000,
@@ -17,6 +20,7 @@
     {
       "id": "mua-union",
       "type": "UNION",
+      "namePrefix": "[MUA] ",
       "enabled": true,
       "priority": 10,
       "apiRoot": "https://skin.mualliance.ltd/api/union/yggdrasil",
@@ -29,6 +33,7 @@
     {
       "id": "my-skin-site",
       "type": "SKIN_SITE",
+      "namePrefix": "[皮肤站] ",
       "enabled": false,
       "priority": 20,
       "apiRoot": "https://skin.example.org/api/yggdrasil",

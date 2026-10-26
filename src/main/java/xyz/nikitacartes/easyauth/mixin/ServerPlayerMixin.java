@@ -32,6 +32,10 @@ import xyz.nikitacartes.easyauth.dialog.AuthDialogs;
 import xyz.nikitacartes.easyauth.event.AuthEventHandler;
 import xyz.nikitacartes.easyauth.integrations.FloodgateApiHelper;
 import xyz.nikitacartes.easyauth.integrations.VanishIntegration;
+import xyz.nikitacartes.easyauth.integrations.SourceNameDisplay;
+import xyz.nikitacartes.easyauth.sources.AuthenticationChannel;
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
+import net.minecraft.network.chat.Component;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
 import xyz.nikitacartes.easyauth.utils.*;
@@ -91,6 +95,12 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
 
     @Unique
     private boolean easyAuth$relaxedSourceChatKeys = false;
+
+    @Unique
+    private AuthenticationChannel easyAuth$authenticationChannel = AuthenticationChannel.OFFLINE;
+
+    @Unique
+    private String easyAuth$authenticationSourceId;
 
     @Unique
     private boolean wasVanished = false;
@@ -249,6 +259,27 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
         return easyAuth$relaxedSourceChatKeys;
     }
 
+    @Override
+    public void easyAuth$setAuthenticationSource(AuthenticationChannel channel, String sourceId) {
+        easyAuth$authenticationChannel = java.util.Objects.requireNonNull(channel);
+        easyAuth$authenticationSourceId = sourceId;
+    }
+
+    @Override
+    public AuthenticationChannel easyAuth$getAuthenticationChannel() {
+        return easyAuth$authenticationChannel;
+    }
+
+    @Override
+    public String easyAuth$getAuthenticationSourceId() {
+        return easyAuth$authenticationSourceId;
+    }
+
+    @ModifyReturnValue(method = "getTabListDisplayName()Lnet/minecraft/network/chat/Component;", at = @At("RETURN"))
+    private Component easyAuth$sourceTabName(Component original) {
+        return SourceNameDisplay.tabName(player, original);
+    }
+
     /**
      * Checks whether player is authenticated.
      *
@@ -353,6 +384,8 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
         newPlayerAuth.easyAuth$canSkipAuth(oldPlayerAuth.easyAuth$canSkipAuth());
         newPlayerAuth.easyAuth$setExternalAuthentication(oldPlayerAuth.easyAuth$isExternalAuthenticated(),
                 oldPlayerAuth.easyAuth$relaxSourceChatKeys());
+        newPlayerAuth.easyAuth$setAuthenticationSource(oldPlayerAuth.easyAuth$getAuthenticationChannel(),
+                oldPlayerAuth.easyAuth$getAuthenticationSourceId());
         newPlayerAuth.easyAuth$setAuthenticated(oldPlayerAuth.easyAuth$isAuthenticated());
 
         newPlayerAuth.easyAuth$setPlayerEntryV1(oldPlayerAuth.easyAuth$getPlayerEntryV1());
