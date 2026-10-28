@@ -1,6 +1,6 @@
 # Fabric 1.20.4 release verification - 2026-10-28
 
-Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.7.jar`.
+Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.8.jar`.
 
 ## Build and tests
 
@@ -13,6 +13,8 @@ Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.7.jar`.
 Unit coverage includes the previous identity isolation, authentication, configuration and connection-proof suite, two new profile-endpoint configuration cases, and 44 skin cases: 22 MineSkin HTTP, 11 cache/engine, 4 bridge configuration, 4 texture descriptors and 3 profile lookups. These check queue state transitions, short result IDs, 429 delays and time units, no duplicate submission after acceptance, whole-response deadlines and size limits, redirects disabled, credential handling, request deduplication, caller-future isolation, atomic bounded caching, failure backoff, stale-request races, and verified provider-UUID lookup.
 
 Skin failing-test evidence is retained in `build/skin-http-red.log`, `build/skin-core-red.log`, `build/skin-runtime-red.log`, `build/skin-review-red.log`, `build/skin-result-red.log` and `build/skin-capacity-red.log`. In particular, review regressions caught late old requests replacing a newer identity skin, validation during cache construction, a key-length mismatch, valid short result IDs being refused, and unbounded login waiters behind one deduplicated generation.
+
+The `.8` patch creates a missing empty `mineskin.key` after successful configuration validation, including reloads. Existing credentials are preserved byte-for-byte, and environment keys are never written to the placeholder. Updated configuration tests first reproduced the missing file (`build/skin-key-file-red.log`) and passed in the final build. Placeholder creation failures are logged without invalidating the configuration, preserving environment-key use in read-only directories.
 
 ## Runtime evidence
 
@@ -33,7 +35,7 @@ No player respawn, movement or in-session entity replacement is used. Identity a
 ## Artifact inspection
 
 ```powershell
-python tools/verify-1.20.4-artifact.py build/libs/easyauth-fabric-mc1.20.4-4.0.0-multisource.7.jar
+python tools/verify-1.20.4-artifact.py build/libs/easyauth-fabric-mc1.20.4-4.0.0-multisource.8.jar
 ```
 
 Checks passed for release metadata, Java 17 classes, remapped login/command/diagnostic mixins, skin bridge classes and authlib validation references, SQLite bundling, companion entrypoint, MIT license and duplicate ZIP entries. `git diff --check` passed.

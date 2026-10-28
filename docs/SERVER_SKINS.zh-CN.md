@@ -11,8 +11,8 @@
 ## 配置密钥并启用
 
 1. 在 [MineSkin 官方密钥页面](https://account.mineskin.org/keys/)创建服务器使用的 API key；流程参见[官方入门文档](https://docs.mineskin.org/docs/guides/getting-started/)。
-2. 任选一种方式保存密钥：在启动 Java 服务器的进程环境中设置 `EASYAUTH_MINESKIN_API_KEY`，或使用服务器本地文本编辑器创建 `config/EasyAuth/mineskin.key`，文件只放密钥本身的一行文本，不加引号或 `Bearer ` 前缀。非空环境变量优先于文件。密钥只保存在服务器端，不要发送到聊天或提交到代码仓库。[官方密钥使用建议](https://docs.mineskin.org/docs/guides/api-best-practises/)
-3. 首次启动会在 `config/EasyAuth/skin-bridge.json` 写入默认配置；也可复制 [skin-bridge.example.json](skin-bridge.example.json) 到该位置。默认 `enabled` 为 `true`。
+2. 任选一种方式保存密钥：在启动 Java 服务器的进程环境中设置 `EASYAUTH_MINESKIN_API_KEY`，或填写 `config/EasyAuth/mineskin.key`，文件只放密钥本身的一行文本，不加引号或 `Bearer ` 前缀。非空环境变量优先于文件。密钥只保存在服务器端，不要发送到聊天或提交到代码仓库。[官方密钥使用建议](https://docs.mineskin.org/docs/guides/api-best-practises/)
+3. 首次启动会在 `config/EasyAuth/skin-bridge.json` 写入默认配置；也可复制 [skin-bridge.example.json](skin-bridge.example.json) 到该位置。默认 `enabled` 为 `true`。从 `.8` 起，每次成功加载皮肤配置时都会补建缺失的空 `mineskin.key`，包括启动和 `/auth skins reload`；已有文件不会被覆盖，环境变量密钥也不会写入该文件。空文件仍需填写真实 API key。目录不可写时会记录提示，环境变量方式仍可使用。
 4. 修改配置或密钥文件后，由管理员执行 `/auth skins reload`，或重启服务器。修改操作系统环境变量后，应重启 Java 进程，使其取得新的环境。`/auth skins reload` 会保留已有的持久缓存，但会结束旧桥接实例的后台任务；在线玩家的皮肤在下次登录时应用。
 
 启动日志或重载结果中的 `MineSkin key=configured` 表示已读取密钥，不等于密钥已通过远端验证。`MineSkin key=missing (cache only)` 表示未配置密钥：已有缓存仍可使用，不能生成新的转换结果。若没有可用缓存，第三方皮肤在原版客户端上仍可能显示默认皮肤；账号可以照常完成认证。

@@ -18,13 +18,22 @@ class SkinBridgeConfigTest {
         return SkinBridgeConfig.load(file);
     }
 
-    @Test void createsBoundedDefaultsWithoutWritingAnApiKey() throws Exception {
-        Path file = temp.resolve("skin-bridge.json");
+    @Test void createsEmptyKeyFileWithoutOverwritingAnExistingCredential() throws Exception {
+        Path file = temp.resolve("nested/EasyAuth/skin-bridge.json");
+        Path keyFile = file.resolveSibling("mineskin.key");
         assertEquals(SkinBridgeConfig.defaults(), SkinBridgeConfig.load(file));
         assertEquals(8000, SkinBridgeConfig.load(file).loginWaitMillis());
         assertFalse(Files.readString(file).contains("apiKey"));
-        assertFalse(Files.exists(temp.resolve("mineskin.key")));
-        assertEquals("", SkinBridgeConfig.readApiKey(temp, Map.of()));
+        assertTrue(Files.isRegularFile(keyFile));
+        assertEquals(0, Files.size(keyFile));
+        assertEquals("", SkinBridgeConfig.readApiKey(file.getParent(), Map.of()));
+        byte[] credential = " fixture-existing-key\r\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(keyFile, credential);
+        SkinBridgeConfig.load(file);
+        assertArrayEquals(credential, Files.readAllBytes(keyFile));
+        Files.delete(keyFile);
+        SkinBridgeConfig.load(file);
+        assertEquals(0, Files.size(keyFile));
     }
 
     @Test void validatesFieldTypesUnknownKeysAndResourceBounds() throws Exception {
@@ -40,6 +49,9 @@ class SkinBridgeConfigTest {
     }
 
     @Test void keyEnvironmentOverridesSeparateFileAndEmptyEnvironmentFallsBack() throws Exception {
+        SkinBridgeConfig.load(temp.resolve("skin-bridge.json"));
+        assertEquals("fixture-env-key", SkinBridgeConfig.readApiKey(temp, Map.of("EASYAUTH_MINESKIN_API_KEY", "fixture-env-key")));
+        assertEquals(0, Files.size(temp.resolve("mineskin.key")));
         Files.writeString(temp.resolve("mineskin.key"), " fixture-file-key\n");
         assertEquals("fixture-env-key", SkinBridgeConfig.readApiKey(temp, Map.of("EASYAUTH_MINESKIN_API_KEY", "fixture-env-key")));
         assertEquals("fixture-file-key", SkinBridgeConfig.readApiKey(temp, Map.of("EASYAUTH_MINESKIN_API_KEY", " ")));

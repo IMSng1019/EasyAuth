@@ -8,7 +8,7 @@
 
 ## 启用
 
-1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.7.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
+1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.8.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
 2. 初次启动会生成 `config/EasyAuth/sources.json`。默认只配置官方源，走原 EasyAuth 登录行为，Union/皮肤站不会自动开启。
 3. 启用多源前，停服备份世界和原认证数据库。修改 `server.properties`：
 

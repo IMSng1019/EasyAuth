@@ -73,13 +73,23 @@ public record SkinBridgeConfig(boolean enabled, int loginWaitMillis, int request
                 }
                 enabled = value.getAsBoolean();
             }
-            return new SkinBridgeConfig(enabled,
+            SkinBridgeConfig config = new SkinBridgeConfig(enabled,
                     integer(obj, "loginWaitMillis", defaults.loginWaitMillis()),
                     integer(obj, "requestTimeoutMillis", defaults.requestTimeoutMillis()),
                     integer(obj, "generationTimeoutMillis", defaults.generationTimeoutMillis()),
                     integer(obj, "refreshAfterHours", defaults.refreshAfterHours()),
                     integer(obj, "maxQueuedSkins", defaults.maxQueuedSkins()),
                     integer(obj, "failureRetrySeconds", defaults.failureRetrySeconds()));
+            try {
+                Files.createFile(file.toAbsolutePath().resolveSibling("mineskin.key"));
+            } catch (FileAlreadyExistsException ignored) {
+                // Atomic creation only: never truncate a credential or copy an environment key.
+            } catch (IOException unavailable) {
+                // A read-only config directory must not disable an environment-supplied key.
+                System.getLogger(SkinBridgeConfig.class.getName()).log(System.Logger.Level.WARNING,
+                        "Could not create empty mineskin.key; create it manually or use EASYAUTH_MINESKIN_API_KEY");
+            }
+            return config;
         } catch (com.google.gson.JsonParseException | IllegalStateException exception) {
             throw new IllegalArgumentException("Malformed skin bridge configuration");
         }
