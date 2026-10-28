@@ -18,6 +18,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.network.protocol.login.ClientboundHelloPacket;
 import net.minecraft.network.protocol.login.ServerboundHelloPacket;
 import net.minecraft.network.protocol.login.ServerboundKeyPacket;
@@ -29,6 +30,7 @@ import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.server.network.ServerLoginPacketListenerImpl;
 import net.minecraft.util.Crypt;
 import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.level.GameType;
 import xyz.nikitacartes.easyauth.EasyAuth;
 import xyz.nikitacartes.easyauth.event.AuthEventHandler;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
@@ -401,6 +403,7 @@ public class MultiAuthRuntimeTest {
             check(union.getDisplayName().getString().equals(localName), "Actual namespace was prefixed a second time");
             check(server.getPlayerList().getPlayerByName(rawName) == official
                     && server.getPlayerList().getPlayerByName(localName) == union, "Official and Union could not coexist by their local names");
+            verifyStationaryMappedPlayerCombat(official, union, unionConnection);
             PlayerEntryV1 unchanged = EasyAuth.DB.getUserData(rawName);
             check(unchanged.uuid.equals(officialUuid) && unchanged.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE
                     && unchanged.password.equals(legacy.password), "Union login changed the original official account");
@@ -431,7 +434,63 @@ public class MultiAuthRuntimeTest {
     }
 
     //? if >= 1.20.3 && < 1.20.5 {
-    /*private static GameProfile awaitProfile(ServerLoginPacketListenerImpl listener, TestConnection connection) throws Exception {
+    /*private static void verifyStationaryMappedPlayerCombat(ServerPlayer official, ServerPlayer union,
+                                                            TestConnection unionConnection) {
+        MinecraftServer server = union.server;
+        boolean oldPvp = server.isPvpAllowed();
+        try {
+            server.setPvpAllowed(true);
+            official.setGameMode(GameType.SURVIVAL);
+            union.setGameMode(GameType.SURVIVAL);
+            check(((PlayerAuth) official).easyAuth$isAuthenticated(), "Official attacker was not authenticated");
+            check(((PlayerAuth) union).easyAuth$isAuthenticated(), "Mapped target was not authenticated");
+
+            // Let vanilla expire its 60-tick spawn protection. The fixture replaces transport,
+            // so drive the world and listener tick entry points, including the world's tickCount
+            // update; do not bypass the listener by calling doTick.
+            // Neither player sends a movement packet anywhere in this regression.
+            for (int i = 0; i < 61; i++) {
+                official.serverLevel().tickNonPassenger(official);
+                official.connection.tick();
+                union.serverLevel().tickNonPassenger(union);
+                union.connection.tick();
+            }
+            var stationaryPosition = union.position();
+            int tickBeforeDamage = union.tickCount;
+            float healthBeforeAttack = union.getHealth();
+            int motionPacketsBeforeAttack = unionConnection.entityMotionPackets;
+            official.attack(union);
+            check(union.getHealth() < healthBeforeAttack, "Official attack did not damage the authenticated mapped player");
+            check(union.invulnerableTime > 0, "First attack did not establish vanilla damage cooldown");
+            check(unionConnection.entityMotionPackets > motionPacketsBeforeAttack
+                            && unionConnection.lastEntityMotion.getId() == union.getId(),
+                    "Mapped player did not receive knockback for its actual entity ID");
+            check(!union.hurt(union.damageSources().playerAttack(official), 1.0F),
+                    "Mapped player lost vanilla protection against immediate repeated damage");
+
+            for (int i = 0; i < 20; i++) {
+                official.serverLevel().tickNonPassenger(official);
+                official.connection.tick();
+                union.serverLevel().tickNonPassenger(union);
+                union.connection.tick();
+            }
+            check(union.tickCount >= tickBeforeDamage + 20, "Mapped player's normal ticks stopped without movement packets");
+            check(union.invulnerableTime == 0, "Mapped player's damage cooldown did not expire while stationary");
+            check(union.position().equals(stationaryPosition), "Server moved the mapped player without client movement");
+            check(((PlayerAuth) union).easyAuth$isAuthenticated(), "Stationary mapped player lost authentication");
+            healthBeforeAttack = union.getHealth();
+            motionPacketsBeforeAttack = unionConnection.entityMotionPackets;
+            official.attack(union);
+            check(union.getHealth() < healthBeforeAttack, "Second official attack required the mapped player to move first");
+            check(unionConnection.entityMotionPackets > motionPacketsBeforeAttack
+                            && unionConnection.lastEntityMotion.getId() == union.getId(),
+                    "Second hit did not send mapped-player knockback");
+        } finally {
+            server.setPvpAllowed(oldPvp);
+        }
+    }
+
+    private static GameProfile awaitProfile(ServerLoginPacketListenerImpl listener, TestConnection connection) throws Exception {
         // Reading the vanilla volatile state establishes visibility of authenticatedProfile.
         var state = ServerLoginPacketListenerImpl.class.getDeclaredField("state");
         state.setAccessible(true);
@@ -451,12 +510,18 @@ public class MultiAuthRuntimeTest {
         private boolean encrypted;
         private volatile String disconnected;
         private ClientboundPlayerInfoUpdatePacket lastPlayerInfo;
+        private ClientboundSetEntityMotionPacket lastEntityMotion;
+        private int entityMotionPackets;
 
         TestConnection() { super(PacketFlow.SERVERBOUND); }
 
         @Override public void send(Packet<?> packet) {
             if (packet instanceof ClientboundHelloPacket hello) challenge = hello;
             if (packet instanceof ClientboundPlayerInfoUpdatePacket info) lastPlayerInfo = info;
+            if (packet instanceof ClientboundSetEntityMotionPacket motion) {
+                lastEntityMotion = motion;
+                entityMotionPackets++;
+            }
         }
 
         @Override public void send(Packet<?> packet, PacketSendListener listener) { send(packet); }

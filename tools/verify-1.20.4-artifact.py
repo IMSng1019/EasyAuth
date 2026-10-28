@@ -12,7 +12,7 @@ with zipfile.ZipFile(jar) as archive:
     assert not duplicates, f"Duplicate entries: {duplicates}"
     metadata = json.loads(archive.read("fabric.mod.json"))
     assert metadata["id"] == "easyauth"
-    assert metadata["version"] == "4.0.0-multisource.3", metadata["version"]
+    assert metadata["version"] in {"4.0.0-multisource.4", "4.0.0-multisource.5-diagnostic", "4.0.0-multisource.6"}, metadata["version"]
     assert metadata["depends"]["java"] == ">=17", metadata["depends"]
     assert "1.20.3" in metadata["depends"]["minecraft"]
     assert "MIT License" in archive.read("LICENSE").decode("utf-8")
@@ -26,6 +26,22 @@ with zipfile.ZipFile(jar) as archive:
     assert "ServerLoginPacketListenerImplMixin" in mixins["server"]
     assert "PlayerDisplayNameMixin" in mixins["server"]
     assert "ServerScoreboardDisplayNameMixin" in mixins["server"]
+    assert "EntitySelectorParserMixin" in mixins["server"]
+    command_mixin = archive.read("xyz/nikitacartes/easyauth/mixin/EntitySelectorParserMixin.class")
+    assert b"net/minecraft/class_2303" in command_mixin and b"method_9849" in command_mixin
+    if metadata["version"] == "4.0.0-multisource.6":
+        for mixin, target in (("CommandSuggestionsMixin", b"net/minecraft/class_2170"),
+                              ("EntityArgumentSuggestionsMixin", b"net/minecraft/class_2186")):
+            assert mixin in mixins["server"], mixin
+            assert target in archive.read(f"xyz/nikitacartes/easyauth/mixin/{mixin}.class"), mixin
+        assert "xyz/nikitacartes/easyauth/integrations/ExternalNameSuggestions.class" in names
+    if metadata["version"] in {"4.0.0-multisource.5-diagnostic", "4.0.0-multisource.6"}:
+        for mixin, target in (("CombatDiagnosticsPacketMixin", b"net/minecraft/class_3244"),
+                              ("CombatDiagnosticsPlayerMixin", b"net/minecraft/class_3222")):
+            assert mixin in mixins["server"], mixin
+            assert target in archive.read(f"xyz/nikitacartes/easyauth/mixin/{mixin}.class"), mixin
+        diagnostics = archive.read("xyz/nikitacartes/easyauth/diagnostics/CombatDiagnostics.class")
+        assert b"easyauth.debugCombat" in diagnostics
     login_mixin = archive.read("xyz/nikitacartes/easyauth/mixin/ServerLoginPacketListenerImplMixin.class")
     assert b"net/minecraft/class_3248" in login_mixin, "Minecraft login listener was not remapped"
     assert b"net/minecraft/server/network/ServerLoginPacketListenerImpl" not in login_mixin

@@ -1,6 +1,6 @@
-# 1.20.4 release verification — 2026-10-27
+# 1.20.4 release verification — 2026-10-28
 
-Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.3.jar`.
+Current artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.6.jar`. Earlier `.4` and `.5-diagnostic` artifacts remain available separately.
 
 Build command (build JVM Java 25, test/runtime JVM Java 17):
 
@@ -8,7 +8,9 @@ Build command (build JVM Java 25, test/runtime JVM Java 17):
 .\gradlew.bat '-PeasyauthTarget=1.20.3-fabric' :1.20.3-fabric:build :1.20.3-fabric:runGameTest :1.20.3-fabric:collectJars --configure-on-demand --offline
 ```
 
-Result: **BUILD SUCCESSFUL**. All 75 unit tests and all 4 required Fabric GameTests passed on Java 17. The unchanged standalone proxy protocol test also passed all 9 checks during the initial release verification.
+Result: **BUILD SUCCESSFUL**. All 75 unit tests and all 6 required Fabric GameTests passed on Java 17. The final `build collectJars` invocation ran both the unit tests and GameTests; see `build/quoted-completion-final.log`. The missing quoted candidate was first reproduced in `build/quoted-completion-red.log`. Earlier diagnostic verification logs are `build/combat-diagnostics-red.log` and `build/combat-diagnostics-final.log`. The unchanged standalone proxy protocol test passed all 9 checks during the initial release verification; it was not rerun for these patches.
+
+This release adds correctly quoted target completion to the command compatibility fix and opt-in combat observation. It is not a claim of complete vanilla equivalence. The user reports combat now works, supported by the supplied `.5` server diagnostics; the earlier intermittent cause is not established. External skin rendering still requires client support.
 
 Unit coverage: 23 identity persistence tests, 3 local-name policy tests, 7 legacy reservation policy tests, 13 HTTP authentication tests, 22 configuration tests, and 7 connection-proof tests. Includes schema-v1 to v2 upgrade without renaming identities, independent official/Union names, persistent creation prefixes, namespace ownership, 16-character limits, database reopen/concurrent creation/rollback, raw and native-v7 UUIDs, remap stability, conflicts, partial successful HTTP responses, deadlines, priority, saturated custom worker isolation and exact per-source provenance.
 
@@ -18,12 +20,24 @@ The same-name regression first reproduced the user's exact existing-account coll
 
 Existing unprefixed-profile compatibility and display integration checks still exercise real Minecraft display methods and outgoing player-info packets: unchanged real name/UUID/database identity, retained styles, live reload/null restoration, and team join/leave/prefix changes/removal. Namespacing applies only at initial allocation; persisted names remain immutable. The strict configuration tests cover namespace overlap, disabled-source reservations and compatibility of official/offline/Floodgate display-only prefixes.
 
+The new command regression first failed on the unpatched implementation with `Invalid name or UUID` at the opening bracket (`build/gametest-red.log`). After the fix, it executes real vanilla teleport commands from an official player to an allocated `[MUA]` account with and without quotes. It also verifies normal names, quoted selector options, `@s`, case-insensitive lookup, argument boundaries, rejection of unallocated/malformed tokens, and unchanged UUID/name. Only the server's entity-target name parser is extended; client highlighting and third-party parsers are outside this fix.
+
+The same regression now verifies quoted completion for an empty target, bare `[M` prefix and opening double quote, plus normal player and selector suggestions. It calls real `sendCommands`, serializes/deserializes the command-tree packet, verifies `minecraft:ask_server` routing and retention of an existing registered provider, and confirms the live server dispatcher and non-entity arguments stay unchanged. It then sends an actual command-suggestion request through the server listener and round-trips the response packet. With the identity ledger detached so the server parser extension falls through, the selected completion is accepted by vanilla syntax, the bare bracket name is still rejected, and UUID syntax remains valid. This tests packet/protocol behavior without launching a graphical client.
+
+Completion tradeoff: vanilla entity arguments without a custom provider now ask the server, adding a network request and losing the client-only crosshair-target UUID suggestion. Typed UUIDs continue to work. Candidates come from the server's vanilla candidate list, not a ledger scan; per-viewer visibility under third-party vanish mods was not tested. Manually typing an unquoted bracket name can still be marked red by a stock client.
+
+The authenticated same-name integration test now also invokes actual player attacks. With no movement packets, it drives `ServerLevel.tickNonPassenger` and `ServerGamePacketListenerImpl.tick`, waits out spawn protection, checks first damage/knockback, rejects immediate repeated damage, expires the damage cooldown and checks a second attack/knockback. Authentication and position stay unchanged and motion packets use the actual entity ID. This deliberately drives vanilla tick entry points with fixture transport; it does not reproduce full world scheduling, incoming interaction packet processing, the user's additional mods or real client movement. It passed without any change to production combat/authentication logic, so the reported intermittent combat bug is **not marked fixed**.
+
+The diagnostic GameTest registers real player entities in the test world and calls the actual incoming `ServerboundInteractPacket` handler. Before implementation it reached the expected missing-log assertion after successfully damaging the target. With the observation hooks it verifies: default silence; unchanged damage when enabled; exactly one attack/hurt record for one accepted attack; a rejected cooldown hit; authentication retention; no password/address fields; silence when disabled; missing-target observation; and the 1000-event plus one-notice cap. The hurt wrapper invokes the original once and preserves its result. Observations are limited to the server thread. This fixture replaces transport and does not exercise the user's full modpack or physical clients. See `docs/COMBAT_DIAGNOSTICS.zh-CN.md` for the opt-in JVM property and interpretation limits.
+
 Artifact inspection:
 
 ```powershell
-python tools/verify-1.20.4-artifact.py build/libs/easyauth-fabric-mc1.20.4-4.0.0-multisource.3.jar
+python tools/verify-1.20.4-artifact.py build/libs/easyauth-fabric-mc1.20.4-4.0.0-multisource.6.jar
 ```
 
-Passed: release metadata, Java 17 class versions, remapped login mixin, display/scoreboard mixin registration, identity/runtime classes, bundled SQLite driver, companion entrypoint, MIT license, and no duplicate ZIP entries. Shadow's input-duplicate warnings do not represent duplicate entries in the final remapped jar. `git diff --check` passed.
+Passed: release metadata, Java 17 class versions, remapped login/command/diagnostic mixins, display/scoreboard mixin registration, identity/runtime classes, bundled SQLite driver, companion entrypoint, MIT license, and no duplicate ZIP entries. `git diff --check` passed.
 
-Limits: no production MUA/skin-site credentials or private site contract were supplied. Live provider authentication, remote MySQL/PostgreSQL/MongoDB deployments, a running Floodgate/LuckPerms installation and graphical companion/skin rendering were not exercised. The original backends compile, SQLite is exercised, and existing integration hooks are retained. No cross-source binding command is included; collisions deny rather than merge. See the setup guide for the unavoidable 1.20.4 new offline-v3 versus external-v3 routing choice.
+Client skin support is supplied separately as `easyauth-client-skin-support-1.20.4.zip`. The official CustomSkinLoader Universal 15.1 jar matches its release SHA-256 (`c8769a38b3cc1da2a7b2f5827d1a53a24cd1ef6d0784b1eb545569f5882a2ffb`); ZIP integrity, client-only metadata and the GameProfile-only JSON were checked. Upstream source directly reads the forwarded textures. No downloaded jar was executed and no graphical skin-rendering acceptance was performed.
+
+Limits: the user's server log confirms successful real official/MUA authentication, but these automated tests use local HTTP fixtures. The supplied official client log now directly confirms `Textures payload contains blocked domain` for `skin.mualliance.ltd` at 19:24:57. No explicit signature-failure log was found. Forwarding properties does not add client trust. The same client logs also show shared-directory log overlap and corrupt Bobby caches; neither establishes a combat cause. Real client rendering, the complete installed modpack, remote MySQL/PostgreSQL/MongoDB, and running Floodgate/LuckPerms integration were not tested. The original backends compile and SQLite is exercised. No production server files, accounts, UUIDs or world data were changed. See `docs/CLIENT_LOG_FINDINGS.zh-CN.md` for the timeline and remaining uncertainty.
