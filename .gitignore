@@ -27,3 +27,6 @@ bin/
 run/
 /versions/
 /client/versions/
+
+# Server-local skin bridge credential
+**/mineskin.key

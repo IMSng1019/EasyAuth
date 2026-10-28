@@ -8,7 +8,8 @@ sourceSets {
     main {
         java.setSrcDirs(listOf("../../src/main/java"))
         java.include("xyz/nikitacartes/easyauth/sources/**")
-        java.exclude("**/MultiAuth.java", "**/LegacyIdentityGuard.java")
+        java.include("xyz/nikitacartes/easyauth/skins/**")
+        java.exclude("**/MultiAuth.java", "**/LegacyIdentityGuard.java", "**/ServerSkinBridge.java")
     }
     test {
         java.setSrcDirs(listOf("../../src/test/java"))

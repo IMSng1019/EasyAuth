@@ -23,6 +23,7 @@ import java.util.regex.PatternSyntaxException;
 /** Validated immutable configuration. Reloaders must publish a complete new snapshot atomically. */
 public final class SourcesConfig {
     public static final String OFFICIAL_HAS_JOINED = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
+    public static final String OFFICIAL_PROFILE = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}?unsigned=false";
     private static final String SESSION_PATH = "/sessionserver/session/minecraft/hasJoined";
     private static final String DEFAULT_JSON = """
             {
@@ -79,7 +80,14 @@ public final class SourcesConfig {
 
     public record Source(String id, SourceType type, boolean enabled, int priority,
                          URI hasJoinedUrl, String mappedUrl, String subjectIdField,
-                         String createdAtField, int timeoutMillis, int retries, String namePrefix) { }
+                         String createdAtField, int timeoutMillis, int retries, String namePrefix, String profileUrl) {
+        public Source(String id, SourceType type, boolean enabled, int priority,
+                      URI hasJoinedUrl, String mappedUrl, String subjectIdField,
+                      String createdAtField, int timeoutMillis, int retries, String namePrefix) {
+            this(id, type, enabled, priority, hasJoinedUrl, mappedUrl, subjectIdField,
+                    createdAtField, timeoutMillis, retries, namePrefix, null);
+        }
+    }
 
     public static SourcesConfig defaults() {
         return parse(DEFAULT_JSON);
@@ -135,7 +143,7 @@ public final class SourcesConfig {
             for (JsonElement element : array) {
                 if (!element.isJsonObject()) throw invalid("each source must be an object");
                 JsonObject obj = element.getAsJsonObject();
-                known(obj, Set.of("id", "type", "enabled", "priority", "apiRoot", "hasJoinedUrl", "mappedUrl",
+                known(obj, Set.of("id", "type", "enabled", "priority", "apiRoot", "hasJoinedUrl", "profileUrl", "mappedUrl",
                         "subjectIdField", "createdAtField", "timeoutMillis", "retries", "unionMode", "unionServers", "namePrefix"), "source");
                 String id = required(obj, "id");
                 if (!id.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")) throw invalid("invalid source id: " + id);
@@ -174,6 +182,7 @@ public final class SourcesConfig {
                 }
                 String rootUrl = optional(obj, "apiRoot");
                 String joinedUrl = optional(obj, "hasJoinedUrl");
+                String profileUrl = optional(obj, "profileUrl");
                 String mapping = optional(obj, "mappedUrl");
                 String subject = optional(obj, "subjectIdField");
                 String created = optional(obj, "createdAtField");
@@ -188,10 +197,13 @@ public final class SourcesConfig {
                 if (!mode.equals("ALL") && codes.isEmpty()) throw invalid("unionServers is required for " + mode + ": " + id);
                 if (type == SourceType.OFFICIAL) {
                     officialCount++;
-                    if (rootUrl != null || (joinedUrl != null && !joinedUrl.equals(OFFICIAL_HAS_JOINED)) || mapping != null || subject != null || created != null) {
+                    if (rootUrl != null || (joinedUrl != null && !joinedUrl.equals(OFFICIAL_HAS_JOINED))
+                            || (profileUrl != null && !profileUrl.equals(OFFICIAL_PROFILE))
+                            || mapping != null || subject != null || created != null) {
                         throw invalid("OFFICIAL must use the fixed Mojang endpoint without a mapping: " + id);
                     }
                     joinedUrl = OFFICIAL_HAS_JOINED;
+                    profileUrl = OFFICIAL_PROFILE;
                 } else {
                     if ((rootUrl == null) == (joinedUrl == null)) throw invalid("exactly one of apiRoot or hasJoinedUrl is required: " + id);
                     if (rootUrl != null) {
@@ -216,9 +228,20 @@ public final class SourcesConfig {
                         throw invalid("subjectIdField/createdAtField require mappedUrl: " + id);
                     }
                 }
+                if (profileUrl == null && joinedUrl.endsWith("/session/minecraft/hasJoined")) {
+                    profileUrl = joinedUrl.substring(0, joinedUrl.length() - "hasJoined".length())
+                            + "profile/{uuid}?unsigned=false";
+                }
+                if (profileUrl != null) {
+                    if (profileUrl.length() > 2048 || !profileUrl.contains("{uuid}")) {
+                        throw invalid("profileUrl must be a bounded URL template containing {uuid}: " + id);
+                    }
+                    validateUrl(profileUrl.replace("{uuid}", "123456781234423482341234567890ab"), true);
+                }
                 if (subject != null) validateField(subject);
                 if (created != null) validateField(created);
-                sources.add(new Source(id, type, enabled, priority, validateUrl(joinedUrl, false), mapping, subject, created, timeout, retries, namePrefix));
+                sources.add(new Source(id, type, enabled, priority, validateUrl(joinedUrl, false), mapping, subject, created,
+                        timeout, retries, namePrefix, profileUrl));
             }
             if (officialCount > 1) throw invalid("only one OFFICIAL source is allowed");
             sources.sort(Comparator.comparingInt(Source::priority));

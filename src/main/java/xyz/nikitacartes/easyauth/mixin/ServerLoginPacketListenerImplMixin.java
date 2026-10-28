@@ -266,17 +266,27 @@ public abstract class ServerLoginPacketListenerImplMixin {
     @Unique
     private void easyAuth$completeSourceLogin(String digest) {
         try {
-            GameProfile profile = digest == null
-                    ? MultiAuth.preparePassword(server, easyAuth$sourceUsername)
-                    : MultiAuth.authenticate(server, connection, easyAuth$sourceSnapshot, easyAuth$sourceUsername, digest);
-            if (connection.isConnected()) {
-                authenticatedProfile = profile;
-                state = ServerLoginPacketListenerImpl.State.VERIFYING;
-            } else {
-                MultiAuth.forget(connection);
+            if (digest == null) {
+                easyAuth$publishSourceProfile(MultiAuth.preparePassword(server, easyAuth$sourceUsername));
+                return;
             }
+            MultiAuth.authenticateAsync(server, connection, easyAuth$sourceSnapshot, easyAuth$sourceUsername, digest)
+                    .whenComplete((profile, failure) -> {
+                        if (failure == null) easyAuth$publishSourceProfile(profile);
+                        else easyAuth$rejectSourceLogin(new IllegalStateException("Authentication could not complete"));
+                    });
         } catch (Exception e) {
             easyAuth$rejectSourceLogin(e);
+        }
+    }
+
+    @Unique
+    private void easyAuth$publishSourceProfile(GameProfile profile) {
+        if (connection.isConnected()) {
+            authenticatedProfile = profile;
+            state = ServerLoginPacketListenerImpl.State.VERIFYING;
+        } else {
+            MultiAuth.forget(connection);
         }
     }
 

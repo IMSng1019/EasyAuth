@@ -1,5 +1,7 @@
 # 让正版客户端显示 MUA 皮肤
 
+这是可选的客户端方案。`.7` 已提供[无需客户端皮肤模组的服务端桥接](SERVER_SKINS.zh-CN.md)，服务器配置 MineSkin 密钥后可优先使用该方案。
+
 本次正版客户端在 `19:24:57` 明确报错 `Textures payload contains blocked domain`，拒绝了 `skin.mualliance.ltd` 的皮肤地址。服务端已经转发 MUA 的纹理属性；要让观看者显示它，需要客户端支持外置纹理。这里使用 CustomSkinLoader 直接读取服务器发送的 `GameProfile.textures`，不使用服内的 `[MUA]` 名字查询上游皮肤站，也不更改账号 UUID 或登录认证。
 
 ## 已准备的客户端文件

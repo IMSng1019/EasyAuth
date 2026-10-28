@@ -10,7 +10,9 @@
       "xyz.nikitacartes.easyauth.utils.TotpTest",
       "xyz.nikitacartes.easyauth.sources.MultiAuthRuntimeTest",
       "xyz.nikitacartes.easyauth.sources.CommandTargetRuntimeTest",
-      "xyz.nikitacartes.easyauth.diagnostics.CombatDiagnosticsRuntimeTest"
+      "xyz.nikitacartes.easyauth.diagnostics.CombatDiagnosticsRuntimeTest",
+      "xyz.nikitacartes.easyauth.skins.ServerSkinBridgeRuntimeTest",
+      "xyz.nikitacartes.easyauth.skins.SkinBridgeLoginRuntimeTest"
     ]
   }
 }

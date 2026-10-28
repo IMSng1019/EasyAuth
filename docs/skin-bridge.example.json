@@ -1,0 +1,10 @@
+{
+  "configVersion": 1,
+  "enabled": true,
+  "loginWaitMillis": 8000,
+  "requestTimeoutMillis": 5000,
+  "generationTimeoutMillis": 60000,
+  "refreshAfterHours": 24,
+  "maxQueuedSkins": 64,
+  "failureRetrySeconds": 60
+}

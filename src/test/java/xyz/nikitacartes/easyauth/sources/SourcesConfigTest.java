@@ -28,6 +28,28 @@ class SourcesConfigTest {
         assertTrue(Files.exists(file));
     }
 
+    @Test void profileLookupEndpointsFollowOnlyStandardSessionPaths() throws Exception {
+        assertEquals(SourcesConfig.OFFICIAL_PROFILE, SourcesConfig.defaults().sources().get(0).profileUrl());
+        assertEquals("https://skin.test/api/sessionserver/session/minecraft/profile/{uuid}?unsigned=false",
+                load("[{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"apiRoot\":\"https://skin.test/api\"}]").sources().get(0).profileUrl());
+        assertEquals("https://skin.test/api/sessionserver/session/minecraft/profile/{uuid}?unsigned=false",
+                load("[{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"hasJoinedUrl\":\"https://skin.test/api/sessionserver/session/minecraft/hasJoined\"}]").sources().get(0).profileUrl());
+        assertNull(load("[{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"hasJoinedUrl\":\"https://skin.test/custom-login\"}]").sources().get(0).profileUrl());
+        assertEquals("https://skin.test/custom-profile/{uuid}?unsigned=false",
+                load("[{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"hasJoinedUrl\":\"https://skin.test/custom-login\",\"profileUrl\":\"https://skin.test/custom-profile/{uuid}?unsigned=false\"}]").sources().get(0).profileUrl());
+    }
+
+    @Test void profileLookupCannotRedirectOfficialIdentityOrUseMalformedTemplates() {
+        assertThrows(IllegalArgumentException.class,
+                () -> load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"profileUrl\":\"https://skin.test/profile/{uuid}\"}]"));
+        for (String url : new String[]{"https://skin.test/profile", "file:///profile/{uuid}",
+                "https://secret@skin.test/profile/{uuid}", "https://skin.test/profile/{uuid}#fragment",
+                "https://skin.test/profile/{name}"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> load("[{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"apiRoot\":\"https://skin.test/api\",\"profileUrl\":\"" + url + "\"}]"), url);
+        }
+    }
+
     @Test void rejectsDuplicateIdsAndPriorities() {
         assertThrows(IllegalArgumentException.class, () -> load("[{\"id\":\"same\",\"type\":\"OFFICIAL\",\"priority\":0},{\"id\":\"same\",\"type\":\"SKIN_SITE\",\"priority\":1,\"apiRoot\":\"https://skin.test/api\"}]"));
         assertThrows(IllegalArgumentException.class, () -> load("[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0},{\"id\":\"skin\",\"type\":\"SKIN_SITE\",\"priority\":0,\"apiRoot\":\"https://skin.test/api\"}]"));

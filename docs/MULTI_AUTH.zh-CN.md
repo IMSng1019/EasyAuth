@@ -2,11 +2,13 @@
 
 本分支提供纯 Fabric 服务端的 Mojang、MUA Union 和多皮肤站 Yggdrasil 会话认证。无需 Velocity/BungeeCord，也不需要服务端 authlib-injector agent。客户端使用 Union/皮肤站时，仍需支持外置登录的启动器完成对应站点的 `join`。
 
+从 `.7` 起，另支持服务端皮肤桥接：Mojang 皮肤原样保留，MUA／皮肤站的标准皮肤可经 MineSkin 转成原版客户端认可的签名纹理并缓存。启用转换需要服务器配置 MineSkin API key，观看者不需要安装客户端皮肤模组。详见[服务端皮肤配置](SERVER_SKINS.zh-CN.md)。
+
 运行环境：Minecraft **1.20.4**、Java **17 或更高**、Fabric Loader **0.18.6 或更高**及匹配 1.20.4 的 Fabric API。一个 jar 同时包含原 EasyAuth companion；服务端多源登录不要求安装 companion。
 
 ## 启用
 
-1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.6.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
+1. 将发布的 `easyauth-fabric-mc1.20.4-4.0.0-multisource.7.jar` 放入服务器 `mods`，替换旧 EasyAuth jar，勿同时保留两份。
 2. 初次启动会生成 `config/EasyAuth/sources.json`。默认只配置官方源，走原 EasyAuth 登录行为，Union/皮肤站不会自动开启。
 3. 启用多源前，停服备份世界和原认证数据库。修改 `server.properties`：
 
@@ -102,6 +104,7 @@ Union `remapuuid` 只更新 provider UUID/name；`internal_id` 相同时，本�
 - `apiRoot` 或 `hasJoinedUrl`：自定义源二选一。`apiRoot` 自动追加 `/sessionserver/session/minecraft/hasJoined`。官方地址固定为 Mojang，不能把自定义 URL 标记为官方。
 - `timeoutMillis/retries`：单次请求 100–10000ms，重试 0–3。超时、429、5xx 可重试；204/404 等无认证结果可继续下个源。已收到成功响应但格式错误、读取不完整或映射不一致会拒绝，不降级密码。
 - `mappedUrl`：必须含 `{uuid}`；占位符替换为此次成功 `hasJoined` 返回的无横线 UUID。映射响应必须带同值 `uuid`，绝不能用未经认证的输入名字确定 subject。
+- `profileUrl`：可选皮肤资料接口模板，须含 `{uuid}`；只有认证结果没有 `textures` 时才补查，使用已经验证的提供方 UUID。标准 Yggdrasil 地址可自动推导，非标准登录地址需显式配置；官方源只能使用固定 Mojang 资料接口。补查失败不改变认证结果。
 - Union 必填 `mappedUrl`，`subjectIdField` 固定 `internal_id`；`unionMode` 可为 `ALL/ONLY/EXCLUDES`，后两项须配 `unionServers`，如 `["SJMC","FDC","MUA"]`。
 - 皮肤站可配 `subjectIdField`（如 `user.id`）和 `createdAtField`（非负 Unix 时间戳字段），组合稳定 ID 与创建时间，避免站点重用 ID。标准 Yggdrasil 本身不提供这些字段，需要站点有对应的只读映射 API。没有该 API 时，以 provider UUID 为 subject；站点改变 UUID 后会被视为另一身份，冲突时拒绝。
 - `relaxCustomChatKeys`：默认 false；Union 示例 true。仅对本次连接已经认证成功的外置玩家跳过不兼容的聊天 key 更新；官方玩家保持原验证。UUID 重映射会使站点原聊天证书与本地 UUID 不匹配，所以实际部署 Union 时通常需开启。它不让客户端信任第三方皮肤公钥。
@@ -110,19 +113,19 @@ Union `remapuuid` 只更新 provider UUID/name；`internal_id` 相同时，本�
 
 ## 皮肤与认证范围
 
-`textures` 的 value/signature 原样复制到最终 GameProfile，不改写签名内容。UUID/name 映射不会把 MUA 的纹理签名变成 Mojang 签名，也不会给客户端增加皮肤域名白名单。纯服务端认证成功不等于普通正版客户端能够显示外置皮肤，不能据此承诺与原版所有行为完全一致。
+`.7` 对官方纹理原样保留。外置源的可用 Mojang 签名纹理直接使用；其他标准皮肤会根据图片 URL 和 classic/slim 模型生成兼容纹理。生成后的完整 value/signature 必须经过 Mojang authlib 验证，且图片位于 `textures.minecraft.net`，才会替换本次登录的 `textures`。不会改写签名载荷，也不改变映射后的名字、UUID 或其他属性。
 
 2026-10-27 对本次问题涉及的 MUA 公开 profile 进行只读查询，确认其返回了带签名的 `textures`，`SKIN` 地址位于 `skin.mualliance.ltd`。Minecraft 1.20.4 使用的 authlib 6.0.52 默认仅允许 `.minecraft.net`、`.mojang.com` 下的纹理域名；客户端显示其他玩家皮肤还要求签名受其信任。因此，原样转发这份 MUA 纹理不能让未配置外置皮肤支持的正版客户端显示它。此域名限制已由原版字节码和[authlib-injector 上游规范](https://yushijinhun.github.io/authlib-injector/en/yggdrasil-server-technical-specification.html#texture-domain-whitelist)核对。用户随后提供的正版客户端 `latest.log:1044` 在 19:24:57 明确记录了 `Textures payload contains blocked domain`，确认此次确实触发 MUA 域名拒绝；未发现可确认的签名失败记录。详见[客户端日志核对](CLIENT_LOG_FINDINGS.zh-CN.md)。
 
-要让双方互相显示皮肤，可在双方客户端安装并配置能信任 MUA 纹理公钥、允许其皮肤域名且兼容 Mojang 皮肤的外置皮肤支持。仅让 MUA 玩家通过支持外置登录的启动器进服，不会改变正版玩家客户端的信任配置。另一种方案是使用合法取得的 Mojang 签名纹理及其允许的纹理地址进行桥接；本分支尚未实现该方案。删除签名、改写签名内的 UUID/name 或修改 `relaxCustomChatKeys` 都不能解决这些皮肤信任限制，无需为此改变账号认证或持久化 UUID。
+现在可按[服务端皮肤桥接说明](SERVER_SKINS.zh-CN.md)在服务器填写密钥，无需给客户端安装皮肤模组。默认最多等待 8 秒；生成超时或失败时仍正常认证并保留可用旧皮肤，后台结果供下次登录使用。密钥未配置时仅能使用已有转换缓存，不能凭空生成 Mojang 签名。第三方披风、内网或需要额外登录的图片不在保证范围内。
 
-本次另提供[客户端皮肤支持包及安装说明](EXTERNAL_SKINS.zh-CN.md)，使用官方 CustomSkinLoader Universal 15.1 和只包含 `GameProfile` 的加载配置，直接采用服务器转发的纹理。它不是为 MUA 生成 Mojang 签名，也不改登录认证。需要安装到每个观看端客户端；已验证下载摘要和对应实现，用户整合包中的实际显示仍需重启后验收。
+[客户端皮肤支持包](EXTERNAL_SKINS.zh-CN.md)仍可作为可选替代方案，`.7` 服务端桥接不要求安装它。两种方案都不改变登录认证和账号身份。
 
 当前自动化验证与仍需完成的皮肤验收应区分：
 
-- 现有 GameTest 使用 `fixture-texture` / `fixture-signature`，检查属性被保留；这些值不是真实可渲染纹理，测试通过不代表客户端能下载、验证或显示皮肤。
-- 后续自动化回归应检查映射前后的纹理 value/signature 完全一致，并检查实际发送的玩家信息包保留这些属性；不要在测试产物中保存真实账号的原始签名。
-- 图形验收需分别用未配置外置皮肤支持的正版客户端，以及正确配置信任的双方客户端进行对照，检查双方视角、TAB 头像、皮肤模型、重新登录和重启后的显示，并记录客户端的域名、签名或下载错误。上述纯服务端测试没有完成这项验收。
+- 运行时回归检查官方直通、MUA／皮肤站转换、真实认证链路、登录包与 ADD_PLAYER 序列化、签名和域名校验、超时隔离与断线清理。签名校验使用真实 authlib 逻辑及测试信任密钥，转换接口使用本地夹具。
+- 尚未提供真实 MineSkin API key，未执行真实图片生成或双客户端图形验收；不能把自动化通过等同于你的服务器已经完成皮肤显示验收。
+- 配置密钥后，使用普通正版客户端和 MUA 客户端重新进入，检查双方视角、TAB 头像和皮肤模型；首次生成超时则待后台缓存完成后再次登录。
 
 用户日志已证明本次真实官方账号与 MUA 账号均通过认证。自有皮肤站完整登录流程、双方客户端皮肤渲染及其他模组兼容性仍需实际验收，不能由 HTTP fixtures、加密 challenge、身份数据库和 GameTests 的结果推断全部通过。
 

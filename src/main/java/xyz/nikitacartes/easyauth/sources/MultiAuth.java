@@ -15,6 +15,7 @@ import xyz.nikitacartes.easyauth.integrations.SourceNameDisplay;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
 import xyz.nikitacartes.easyauth.utils.PlayersCache;
 import xyz.nikitacartes.easyauth.utils.StoneCutterUtils;
+import xyz.nikitacartes.easyauth.skins.ServerSkinBridge;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -23,6 +24,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +39,7 @@ public final class MultiAuth {
     private static volatile SourcesConfig current;
     private static IdentityStore identities;
     private static SourceAuthenticator authenticator;
+    private static volatile ServerSkinBridge skinBridge;
     private static final ConnectionProofs<Connection> PROOFS = new ConnectionProofs<>();
     // Slow external providers cannot consume the password lane or spawn unbounded coordinators.
     private static final ThreadPoolExecutor PASSWORD_LOGINS = loginLane(8, "password");
@@ -165,6 +169,13 @@ public final class MultiAuth {
 
     public static void onServerStart(MinecraftServer server) {
         validateServer(current, server);
+        try {
+            skinBridge = ServerSkinBridge.open(server, gameDirectory.resolve("config/EasyAuth"));
+            if (skinBridge != null) LogInfo("[skin-bridge] " + skinBridge.status());
+        } catch (Exception cosmeticConfiguration) {
+            // Cosmetic configuration must not prevent an otherwise valid login/server start.
+            LogWarn("[skin-bridge] Could not start skin bridge; account authentication is unchanged. Check skin-bridge.json and mineskin.key.");
+        }
     }
 
     public static void validateServer(SourcesConfig candidate, MinecraftServer server) {
@@ -180,6 +191,7 @@ public final class MultiAuth {
         try {
             PASSWORD_LOGINS.shutdownNow();
             PROVIDER_LOGINS.shutdownNow();
+            if (skinBridge != null) skinBridge.close();
             if (authenticator != null) authenticator.close();
             if (identities != null) identities.close();
         } catch (Exception e) {
@@ -199,6 +211,24 @@ public final class MultiAuth {
         } catch (Exception e) {
             LogError("Authentication source reload rejected; previous snapshot remains active", e);
             source.sendFailure(Component.literal("[EasyAuth] Source reload rejected: " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    public static int reloadSkins(CommandSourceStack source) {
+        try {
+            ServerSkinBridge replacement = ServerSkinBridge.open(source.getServer(), gameDirectory.resolve("config/EasyAuth"));
+            if (replacement == null) {
+                source.sendFailure(Component.literal("[EasyAuth] Skin bridging is supported by the Fabric 1.20.4 build."));
+                return 0;
+            }
+            ServerSkinBridge previous = skinBridge;
+            skinBridge = replacement;
+            if (previous != null) previous.close();
+            source.sendSystemMessage(Component.literal("[EasyAuth] Skin bridge reloaded: " + replacement.status() + ". Changes apply on login."));
+            return 1;
+        } catch (Exception cosmeticConfiguration) {
+            source.sendFailure(Component.literal("[EasyAuth] Skin reload rejected; previous configuration kept. Check skin-bridge.json and mineskin.key."));
             return 0;
         }
     }
@@ -223,19 +253,41 @@ public final class MultiAuth {
 
     public static GameProfile authenticate(MinecraftServer server, Connection connection, SourcesConfig snapshot,
                                            String username, String serverDigest) throws Exception {
+        try {
+            return authenticateAsync(server, connection, snapshot, username, serverDigest).get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw interrupted;
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof Exception cause) throw cause;
+            throw new IllegalStateException("Authentication could not complete", failed);
+        }
+    }
+
+    /** Provider verification runs in its existing lane; cosmetic waiting releases that lane. */
+    public static CompletableFuture<GameProfile> authenticateAsync(MinecraftServer server, Connection connection,
+                                           SourcesConfig snapshot, String username, String serverDigest) throws Exception {
+        long started = System.nanoTime();
+        ServerSkinBridge bridge = skinBridge;
         InetAddress address = null;
         if (server.getPreventProxyConnections() && connection.getRemoteAddress() instanceof InetSocketAddress socket) {
             address = socket.getAddress();
         }
         Optional<AuthenticatedIdentity> result = authenticator.authenticate(snapshot, username, serverDigest, address);
-        if (result.isEmpty()) return preparePassword(server, username);
+        if (result.isEmpty()) return CompletableFuture.completedFuture(preparePassword(server, username));
         AuthenticatedIdentity identity = result.get();
         VerifiedProfile verified = prepareVerified(server, identity, snapshot);
-        GameProfile profile = verified.profile();
-        PROOFS.put(connection, new ConnectionProofs.Proof(StoneCutterUtils.getId(profile),
-                StoneCutterUtils.getName(profile), identity.type() != SourceType.OFFICIAL,
-                snapshot.relaxCustomChatKeys(), identity.sourceId(), identity.type(), verified.localNamePrefix()));
-        return profile;
+        SourcesConfig.Source source = snapshot.sources().stream()
+                .filter(candidate -> candidate.id().equals(identity.sourceId())).findFirst().orElse(null);
+        CompletableFuture<GameProfile> decorated = bridge == null ? CompletableFuture.completedFuture(verified.profile())
+                : bridge.prepare(identity, source, verified.profile(), started);
+        return decorated.handle((profile, cosmeticFailure) -> {
+            GameProfile accepted = cosmeticFailure == null && profile != null ? profile : verified.profile();
+            PROOFS.put(connection, new ConnectionProofs.Proof(StoneCutterUtils.getId(accepted),
+                    StoneCutterUtils.getName(accepted), identity.type() != SourceType.OFFICIAL,
+                    snapshot.relaxCustomChatKeys(), identity.sourceId(), identity.type(), verified.localNamePrefix()));
+            return accepted;
+        });
     }
 
     private record VerifiedProfile(GameProfile profile, String localNamePrefix) {}
