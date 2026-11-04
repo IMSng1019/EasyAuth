@@ -1,3 +1,13 @@
+# Fabric 1.20.4 teleport completion verification - 2026-11-04
+
+Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.11.jar`.
+
+The focused `:1.20.3-fabric:build :1.20.3-fabric:collectJars` build passed with **134 unit tests and 19 required Fabric GameTests**. See `build/tp-completion-final.log`. Artifact inspection passed, including the new suggestion helper and mixin; `javap` confirms the packaged request hook targets intermediary `method_12059`. SHA-256: `5e704709b55c8895c0e4c93445a99d0e0d78979a45676c0628d9f6b14a9f903e`.
+
+The previous network fixture completed suggestion requests synchronously and missed vanilla's single pending-future behavior. The updated fixture follows the cached 1.20.4 `ClientSuggestionProvider` bytecode: a new request cancels the old future, and actual serialized server replies are delivered only after all sibling providers have been called. Before the fix, `tp ` generated two requests and the merged result never completed (`build/tp-first-completion-red.log`). A separate failure exposed vanilla's ambiguous single-destination leaf for an incomplete second argument (`build/tp-second-completion-red.log`).
+
+The final fixture verifies one request per completion, correctly quoted ordinary/MUA/offline candidates at both argument positions, blank input, opening quotes and partial prefixes, leading slash and `/teleport` alias forms. It also checks single-target executability, multiple-target selectors, coordinates, rotations, facing forms, unchanged custom providers, an untouched third-party tree with the same argument shape, and the original server execution tree. The server adjustment runs only while answering suggestion packets and leaves execution parsing unchanged. The client copy accepts a slightly broader completion shape: an invalid single-argument multi-target command can look complete locally, but the original server command still rejects it. No graphical-client session was run; the evidence combines real command/suggestion packet codecs and a bytecode-matched delayed client model.
+
 # Fabric 1.20.4 offline real identity verification - 2026-11-04
 
 Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.10.jar`.

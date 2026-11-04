@@ -1,3 +1,8 @@
+### 4.0.0-multisource.11 — Fabric 1.20.4
+
+- Fix missing first-player suggestions in `/tp` and `/teleport`: the client command tree now makes one server completion request instead of two competing requests that cancel each other.
+- Complete empty and partially quoted/prefixed second-player arguments using the correct suggestion context. Server command execution and custom suggestion providers are preserved.
+
 ### 4.0.0-multisource.10 — Fabric 1.20.4
 
 - Allocate real prefixed offline GameProfile names, using the same ASCII and 16-character limits as MUA names. Players still enter their original launcher name; overhead names, chat, TAB and command targets use the assigned local name without a virtual-team prefix.

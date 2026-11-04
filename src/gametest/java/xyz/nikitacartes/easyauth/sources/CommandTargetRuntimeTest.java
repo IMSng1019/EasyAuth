@@ -21,6 +21,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.coordinates.Vec3Argument;
 import net.minecraft.commands.synchronization.SuggestionProviders;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.Connection;
@@ -61,6 +62,7 @@ public class CommandTargetRuntimeTest {
         var ledgerFile = Files.createTempFile("easyauth-command-targets-", ".sqlite");
         ServerPlayer official = null;
         ServerPlayer union = null;
+        ServerPlayer offline = null;
         try (IdentityStore ledger = new IdentityStore(ledgerFile)) {
             ledgerField.set(null, ledger);
             String rawName = "Cmd" + UUID.randomUUID().toString().substring(0, 8);
@@ -68,8 +70,13 @@ public class CommandTargetRuntimeTest {
                     rawName, UUID.randomUUID(), rawName, List.of()), "[MUA]", (identity, profile, existing) -> {});
             official = player(context, new GameProfile(UUID.randomUUID(), rawName));
             union = player(context, new GameProfile(local.uuid(), local.name()));
+            String offlineRawName = "Off" + UUID.randomUUID().toString().substring(0, 7);
+            var offlineLocal = ledger.resolveOffline(offlineRawName, UUIDUtil.createOfflinePlayerUUID(offlineRawName),
+                    "[OFF]", profile -> {}).profile();
+            offline = player(context, new GameProfile(offlineLocal.uuid(), offlineLocal.name()));
             server.getPlayerList().getPlayers().add(official);
             server.getPlayerList().getPlayers().add(union);
+            server.getPlayerList().getPlayers().add(offline);
             var source = server.createCommandSourceStack();
 
             // Quoted names and vanilla targets already work and must retain their behavior.
@@ -106,10 +113,11 @@ public class CommandTargetRuntimeTest {
             check(result == 1 && official.position().equals(union.position()), "Quoted teleport regressed");
             check(union.getUUID().equals(local.uuid()) && union.getGameProfile().getName().equals(local.name()),
                     "Command compatibility changed persistent identity");
-            verifySuggestions(context, official, local.name(), rawName, ledgerField, ledger);
+            verifySuggestions(context, official, local.name(), offlineLocal.name(), rawName, ledgerField, ledger);
         } finally {
             if (official != null) server.getPlayerList().getPlayers().remove(official);
             if (union != null) server.getPlayerList().getPlayers().remove(union);
+            if (offline != null) server.getPlayerList().getPlayers().remove(offline);
             ledgerField.set(null, previousLedger);
             Files.deleteIfExists(ledgerFile);
         }
@@ -244,7 +252,7 @@ public class CommandTargetRuntimeTest {
     }
 
     private static void verifySuggestions(GameTestHelper context, ServerPlayer official, String localName,
-                                          String rawName, java.lang.reflect.Field ledgerField, IdentityStore ledger) throws Exception {
+                                          String offlineName, String rawName, java.lang.reflect.Field ledgerField, IdentityStore ledger) throws Exception {
         var server = context.getLevel().getServer();
         var dispatcher = server.getCommands().getDispatcher();
         CommandSourceStack source = official.createCommandSourceStack();
@@ -265,6 +273,13 @@ public class CommandTargetRuntimeTest {
         dispatcher.register(Commands.literal(fixture)
                 .then(Commands.argument("custom", EntityArgument.entity()).suggests(SuggestionProviders.SUMMONABLE_ENTITIES))
                 .then(Commands.argument("word", StringArgumentType.word())));
+        String similarFixture = fixture + "shape";
+        dispatcher.register(Commands.literal(similarFixture)
+                .then(Commands.argument("location", Vec3Argument.vec3()).executes(command -> 1))
+                .then(Commands.argument("destination", EntityArgument.entity()).executes(command -> 1))
+                .then(Commands.argument("targets", EntityArgument.entities())
+                        .then(Commands.argument("location", Vec3Argument.vec3()).executes(command -> 1))
+                        .then(Commands.argument("destination", EntityArgument.entity()).executes(command -> 1))));
         var serverDestination = (ArgumentCommandNode<CommandSourceStack, ?>) dispatcher.getRoot()
                 .getChild("teleport").getChild("destination");
         check(serverDestination.getCustomSuggestions() == null, "Fixture expected vanilla server-side suggestions");
@@ -281,13 +296,19 @@ public class CommandTargetRuntimeTest {
             commandBuffer.release();
         }
         var clientRoot = decoded.getRoot(CommandBuildContext.simple(server.registryAccess(), server.getWorldData().enabledFeatures()));
-        var destination = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild("teleport").getChild("destination");
+        var targets = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild("teleport").getChild("targets");
         // Registration returns a named Wrapper for the server, but the client registry stores
         // and decodes its underlying provider. Compare the decoded registry value, not Wrapper.
-        check(destination.getCustomSuggestions() == SuggestionProviders.getProvider(
+        check(targets.getCustomSuggestions() == SuggestionProviders.getProvider(
                         new net.minecraft.resources.ResourceLocation("minecraft:ask_server")),
                 "Serialized EntityArgument must ask the server for escaped suggestions");
         check(serverDestination.getCustomSuggestions() == null, "Sending command tree mutated the live server dispatcher");
+        check(dispatcher.getRoot().getChild("teleport").getChild("destination") == serverDestination
+                        && dispatcher.getRoot().getChild("teleport").getChild("targets").getCommand() == null,
+                "Client completion projection changed the executable server teleport tree");
+        check(clientRoot.getChild(similarFixture).getChild("destination") != null
+                        && clientRoot.getChild(similarFixture).getChild("targets").getCommand() == null,
+                "A third-party command with similar arguments was rewritten");
         var custom = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild(fixture).getChild("custom");
         check(custom.getCustomSuggestions() == SuggestionProviders.getProvider(
                         new net.minecraft.resources.ResourceLocation("minecraft:summonable_entities")),
@@ -297,28 +318,81 @@ public class CommandTargetRuntimeTest {
 
         var clientDispatcher = new CommandDispatcher<SharedSuggestionProvider>(clientRoot);
         java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger pendingId = new java.util.concurrent.atomic.AtomicInteger(-1);
+        var pending = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>>();
+        var queued = new java.util.ArrayList<ServerboundCommandSuggestionPacket>();
         SharedSuggestionProvider client = (SharedSuggestionProvider) java.lang.reflect.Proxy.newProxyInstance(
                 SharedSuggestionProvider.class.getClassLoader(), new Class<?>[]{SharedSuggestionProvider.class}, (proxy, method, arguments) -> {
                     if (!method.getName().equals("customSuggestion")) return method.invoke(source, arguments);
                     String input = ((CommandContext<?>) arguments[0]).getInput();
                     int requestId = requests.incrementAndGet();
-                    transport.suggestions = null;
-                    official.connection.handleCustomCommandSuggestions(new ServerboundCommandSuggestionPacket(requestId, input));
-                    check(transport.suggestions != null && transport.suggestions.getId() == requestId,
-                            "Server did not answer the actual suggestion packet");
-                    FriendlyByteBuf suggestionBuffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                    try {
-                        transport.suggestions.write(suggestionBuffer);
-                        return java.util.concurrent.CompletableFuture.completedFuture(
-                                new ClientboundCommandSuggestionsPacket(suggestionBuffer).getSuggestions());
-                    } finally {
-                        suggestionBuffer.release();
-                    }
+                    // Match vanilla ClientSuggestionProvider: a new request cancels the
+                    // previous pending future. Network replies arrive after all siblings
+                    // have asked for suggestions, not synchronously inside this call.
+                    if (pending.get() != null) pending.get().cancel(false);
+                    var future = new java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>();
+                    pending.set(future);
+                    pendingId.set(requestId);
+                    queued.add(new ServerboundCommandSuggestionPacket(requestId, input));
+                    return future;
                 });
-        var remoteSuggestions = clientDispatcher.getCompletionSuggestions(clientDispatcher.parse("tp [M", client)).join();
-        check(requests.get() > 0, "Decoded command tree did not invoke ASK_SERVER");
-        var selected = remoteSuggestions.getList().stream().filter(suggestion -> suggestion.getText().equals(quoted)).findFirst().orElseThrow();
-        String completed = selected.apply("tp [M");
+        String completed = null;
+        for (String input : List.of("tp ", "tp [M", "/tp ", "/tp [OFF]", "/tp \"[OFF]",
+                "/teleport ", "/teleport [M", "tp " + rawName.substring(0, 3),
+                "tp " + rawName + " ", "tp " + rawName + " [M", "/tp " + rawName + " [OFF]",
+                "/tp " + rawName + " \"[OFF]", "tp " + quoted + " ", "tp " + quoted + " [OFF]", "tp @a ")) {
+            queued.clear();
+            StringReader inputReader = new StringReader(input);
+            if (input.startsWith("/")) inputReader.skip();
+            var completion = clientDispatcher.getCompletionSuggestions(clientDispatcher.parse(inputReader, client));
+            check(!queued.isEmpty(), "Decoded command tree did not invoke ASK_SERVER for: " + input);
+            for (var request : queued) {
+                transport.suggestions = null;
+                official.connection.handleCustomCommandSuggestions(request);
+                check(transport.suggestions != null && transport.suggestions.getId() == request.getId(),
+                        "Server did not answer the actual suggestion packet");
+                FriendlyByteBuf suggestionBuffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                try {
+                    transport.suggestions.write(suggestionBuffer);
+                    var response = new ClientboundCommandSuggestionsPacket(suggestionBuffer);
+                    if (response.getId() == pendingId.get()) {
+                        pending.get().complete(response.getSuggestions());
+                        pending.set(null);
+                        pendingId.set(-1);
+                    }
+                } finally {
+                    suggestionBuffer.release();
+                }
+            }
+            check(completion.isDone() && !completion.isCompletedExceptionally() && !completion.isCancelled(),
+                    "Delayed vanilla completion did not finish for: " + input + " (requests=" + queued.size() + ")");
+            check(queued.size() == 1, "Sibling entity branches issued competing server requests for: " + input);
+            var suggestions = completion.join().getList();
+            for (String name : List.of(localName, offlineName, rawName)) {
+                String expected = StringArgumentType.escapeIfRequired(name);
+                if (!input.endsWith(" ") && !input.endsWith(name.substring(0, 3))
+                        && !(name.equals(localName) && input.endsWith("[M"))
+                        && !(name.equals(offlineName) && input.endsWith("[OFF]"))) continue;
+                var selected = suggestions.stream().filter(suggestion -> suggestion.getText().equals(expected)).findFirst()
+                        .orElseThrow(() -> new AssertionError("Missing player " + name + " after delayed completion for: " + input));
+                check(expected.equals(name) || suggestions.stream().noneMatch(suggestion -> suggestion.getText().equals(name)),
+                        "Delayed completion inserted an unquoted prefixed name");
+                String applied = selected.apply(input);
+                StringReader completedReader = new StringReader(applied);
+                if (applied.startsWith("/")) completedReader.skip();
+                var parsed = clientDispatcher.parse(completedReader, client);
+                check(!parsed.getReader().canRead() && parsed.getContext().getLastChild().getCommand() != null,
+                        "Completed teleport command is invalid or lost its single-target executable form: " + applied);
+                if (input.equals("tp [M")) completed = applied;
+            }
+        }
+        check(completed != null, "No completed prefixed command was captured");
+        for (String input : List.of("tp @a ~ ~ ~", "tp @s ~ ~ ~ ~ ~",
+                "tp @s ~ ~ ~ facing entity @e[limit=1] eyes", "tp @s ~ ~ ~ facing ~ ~ ~")) {
+            var parsed = clientDispatcher.parse(input, client);
+            check(!parsed.getReader().canRead() && parsed.getContext().getLastChild().getCommand() != null,
+                    "Teleport projection lost selector, coordinates, rotation or facing syntax: " + input);
+        }
         // Removing the ledger makes our server parser wrapper fall through to vanilla. This
         // checks what an unmodified client's parser will see, not our bare-name extension.
         ledgerField.set(null, null);
