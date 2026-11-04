@@ -5,6 +5,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
 import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 
 import java.util.ArrayDeque;
 import java.util.Collections;
@@ -77,8 +78,9 @@ public class IpLimitManager {
         List<String> existingUsernames = getUsernamesForIp(ipAddress);
 
         // Check if current user is already registered with this IP
+        String accountName = MultiAuth.accountName(currentUsername);
         boolean isExistingUser = existingUsernames.stream()
-                .anyMatch(name -> name.equalsIgnoreCase(currentUsername));
+                .anyMatch(name -> name.equalsIgnoreCase(accountName));
 
         if (isExistingUser) {
             // User is already registered with this IP, don't count against limit

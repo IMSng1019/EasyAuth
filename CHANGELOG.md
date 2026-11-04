@@ -1,3 +1,16 @@
+### 4.0.0-multisource.10 — Fabric 1.20.4
+
+- Allocate real prefixed offline GameProfile names, using the same ASCII and 16-character limits as MUA names. Players still enter their original launcher name; overhead names, chat, TAB and command targets use the assigned local name without a virtual-team prefix.
+- Upgrade the identity ledger to schema 3. Existing raw offline identities can receive a prefix once while keeping their profile ID and effective UUID; assigned names remain fixed across prefix changes or clearing.
+- Resolve allocated local names to the original password database records across all backends. Passwords, OTP, passkeys and session data stay with the original record; connection-bound naming proofs do not bypass password authentication. The retained raw database key still prevents automatic merging with a same-named official account.
+- Continue to quote special command targets and preserve the `.9` display mechanism for purely cosmetic channels. Existing Chinese offline display prefixes must be replaced with a short ASCII prefix such as `[OFF]`; name-based scoreboard and third-party references require administrative updates.
+
+### 4.0.0-multisource.9 — Fabric 1.20.4
+
+- Show configured source prefixes on overhead nameplates as well as chat, TAB and command suggestion tooltips. Client-only team projections preserve account names, UUIDs and authoritative server teams; same-team players with different prefixes have the client team limitations documented in the multi-auth guide.
+- Allow command completion to search by display prefix and correctly quote offline-authenticated players' special names. Selecting a suggestion inserts the real account name and resolves the intended `/tp` target.
+- Refresh nameplates after joins, respawns, team changes and prefix reloads, and restore original client team membership when prefixes are cleared.
+
 ### ToDo
 #### Add
 - Add support for a changing "invalid session" message when offline player connects with online nickname

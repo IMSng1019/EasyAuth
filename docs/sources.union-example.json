@@ -3,9 +3,9 @@
   "parallelism": 4,
   "overallTimeoutMillis": 6000,
   "newPlayerAuth": "EXTERNAL",
-  "offlineNames": ["^Offline_[A-Za-z0-9_]{1,8}$"],
+  "offlineNames": ["^Offline_[A-Za-z0-9_]{1,3}$"],
   "relaxCustomChatKeys": true,
-  "offlineNamePrefix": "[离线] ",
+  "offlineNamePrefix": "[OFF]",
   "floodgateNamePrefix": "[基岩] ",
   "sources": [
     {

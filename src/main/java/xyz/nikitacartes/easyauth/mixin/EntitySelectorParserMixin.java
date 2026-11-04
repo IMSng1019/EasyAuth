@@ -28,7 +28,7 @@ public abstract class EntitySelectorParserMixin {
         }
         if (needsCompatibility) {
             String name = input.substring(start, end);
-            if (MultiAuth.protectedName(name)) {
+            if (MultiAuth.allocatedCommandName(name)) {
                 reader.setCursor(end);
                 return name;
             }

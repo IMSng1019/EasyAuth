@@ -14,14 +14,15 @@ public class PlayersCache {
     private static final Map<String, PlayerEntryV1> playerDataCache = new ConcurrentHashMap<>();
 
     public static void put(String username, PlayerEntryV1 data) {
-        playerDataCache.put(username, data);
+        playerDataCache.put(MultiAuth.accountName(username), data);
     }
 
     public static PlayerEntryV1 get(String username) {
-        return playerDataCache.get(username);
+        return playerDataCache.get(MultiAuth.accountName(username));
     }
 
     public static PlayerEntryV1 getOrLoadOrRegister(String username) {
+        username = MultiAuth.accountName(username);
         PlayerEntryV1 playerEntryV1 = playerDataCache.get(username);
         // Cache should contain the player's data, but Floodgate players are not cached for some reason
         if (playerEntryV1 == null) {
@@ -31,11 +32,12 @@ public class PlayersCache {
     }
 
     public static PlayerEntryV1 loadOrRegister(String username) {
+        username = MultiAuth.accountName(username);
         PlayerEntryV1 playerEntryV1 = DB.getUserData(username);
         if (playerEntryV1 == null) {
             // Every legacy entry point, including Floodgate integrations, must leave external
             // namespaces to the verified source allocator rather than creating placeholders.
-            if (MultiAuth.reservedCustomName(username)) {
+            if (MultiAuth.reservedCustomName(username) || MultiAuth.isReservedOfflineName(username)) {
                 throw new IllegalStateException("This name namespace requires verified source authentication");
             }
             playerEntryV1 = new PlayerEntryV1(username);
@@ -49,6 +51,7 @@ public class PlayersCache {
     }
 
     public static PlayerEntryV1 getOrCreate(String username) {
+        username = MultiAuth.accountName(username);
         PlayerEntryV1 data = playerDataCache.get(username);
 
         if (data == null) {

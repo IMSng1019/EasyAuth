@@ -170,7 +170,7 @@ class IdentityStoreTest {
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file);
              var statement = connection.createStatement(); var rows = statement.executeQuery("PRAGMA user_version")) {
             assertTrue(rows.next());
-            assertEquals(2, rows.getInt(1));
+            assertEquals(3, rows.getInt(1));
         }
     }
 
@@ -301,6 +301,193 @@ class IdentityStoreTest {
             assertFalse(store.hasCustomIdentities());
             assertThrows(IdentityConflictException.class, () -> store.resolve(union("evil", "Alice"), AVAILABLE));
             assertThrows(IdentityConflictException.class, () -> store.reserveLegacy("Alice", raw, "FLOODGATE"));
+        }
+    }
+
+    @Test void schemaTwoOfflineAccountGainsRealPrefixWithoutChangingItsIdentity() throws Exception {
+        Path file = directory.resolve("offline-upgrade.db");
+        UUID uuid = UUID.randomUUID();
+        IdentityStore.LocalProfile raw;
+        try (IdentityStore store = new IdentityStore(file)) {
+            raw = store.reserveLegacy("Alice", uuid, "OFFLINE");
+        }
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = connection.createStatement()) {
+            statement.execute("PRAGMA user_version = 2");
+        }
+        try (IdentityStore store = new IdentityStore(file)) {
+            List<IdentityStore.LocalProfile> checked = new ArrayList<>();
+            var mapped = store.resolveOffline("Alice", uuid, "[OFF] ", checked::add);
+            assertEquals(raw.id(), mapped.profile().id());
+            assertEquals(uuid, mapped.profile().uuid());
+            assertEquals("[OFF]Alice", mapped.profile().name());
+            assertEquals("[OFF]", mapped.profile().namePrefix());
+            assertEquals("Alice", mapped.accountName());
+            assertEquals(List.of(mapped.profile()), checked);
+            assertEquals(mapped, store.findOfflineByAccountName("aLiCe"));
+            assertEquals(mapped, store.findOfflineByLocalName("[off]ALICE"));
+            assertNull(store.findByName("Alice"));
+            assertTrue(store.hasOfflineAliases());
+            assertFalse(store.hasCustomIdentities());
+            assertFalse(store.isProtectedName(mapped.profile().name()));
+            assertFalse(store.isProtectedUuid(uuid));
+            store.assertOfflineAllowed("Alice", uuid);
+            assertThrows(IdentityConflictException.class, () -> store.assertOfflineAllowed(mapped.profile().name(), uuid));
+            assertThrows(IdentityConflictException.class, () -> store.reserveLegacy("Alice", uuid, "OFFLINE"));
+        }
+        try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = connection.createStatement()) {
+            try (var rows = statement.executeQuery("PRAGMA user_version")) {
+                assertTrue(rows.next());
+                assertEquals(3, rows.getInt(1));
+            }
+            try (var rows = statement.executeQuery("SELECT provider_name, provider_uuid FROM source_identity WHERE source_type = 'OFFLINE'")) {
+                assertTrue(rows.next());
+                assertEquals("Alice", rows.getString("provider_name"));
+                assertEquals(uuid.toString(), rows.getString("provider_uuid"));
+                assertFalse(rows.next());
+            }
+        }
+    }
+
+    @Test void offlinePrefixIsPersistedAcrossReopenAndConfigurationChanges() throws Exception {
+        Path file = directory.resolve("offline-stable.db");
+        UUID uuid = UUID.randomUUID();
+        IdentityStore.OfflineProfile original;
+        try (IdentityStore store = new IdentityStore(file)) {
+            original = store.resolveOffline("Alice", uuid, "[OFF]", profile -> {});
+        }
+        try (IdentityStore store = new IdentityStore(file)) {
+            var visits = new ArrayList<IdentityStore.LocalProfile>();
+            assertEquals(original, store.resolveOffline("Alice", uuid, "[NEW]", visits::add));
+            assertEquals(original, store.resolveOffline("Alice", uuid, "", visits::add));
+            assertEquals(List.of(original.profile(), original.profile()), visits);
+            assertEquals(IdentityStore.OFFLINE_SOURCE_ID, store.reservedNameSource("[off]Unallocated"));
+            assertTrue(store.isReservedOfflineName("[OFF]Unallocated"));
+            assertFalse(store.isReservedCustomName("[OFF]Unallocated"));
+            assertFalse(store.isReservedOfflineName("Other[OFF]Alice"));
+            assertNull(store.findOfflineByLocalName("[NEW]Alice"));
+        }
+    }
+
+    @Test void unprefixedOfflineProfilesRemainRawUntilPrefixIsRequested() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-raw.db"))) {
+            var raw = store.resolveOffline("Alice", uuid, "", profile -> {});
+            assertEquals("Alice", raw.profile().name());
+            assertEquals("", raw.profile().namePrefix());
+            assertEquals(raw, store.findOfflineByAccountName("Alice"));
+            assertNull(store.findOfflineByLocalName("Alice"));
+            assertFalse(store.hasOfflineAliases());
+            assertEquals(raw.profile(), store.reserveLegacy("Alice", uuid, "OFFLINE"));
+            var mapped = store.resolveOffline("Alice", uuid, "[OFF]", profile -> {});
+            assertEquals(raw.profile().id(), mapped.profile().id());
+            assertEquals("[OFF]Alice", mapped.profile().name());
+        }
+    }
+
+    @Test void offlineNamespacesCannotBeClaimedByExternalOrDirectPasswordNames() throws Exception {
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-namespace.db"))) {
+            var first = store.resolveOffline("Alice", UUID.randomUUID(), "[OFF]", profile -> {});
+            assertThrows(IdentityConflictException.class, () -> store.resolve(union("evil-one", "Bob"), "[off]", AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.resolve(union("evil-two", "Bob"), "[O", AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.resolve(union("evil-three", "[OFF]Bob"), "", AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("[OFF]Alice", first.profile().uuid(), "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.reserveLegacy("[OFF]Bob", UUID.randomUUID(), "OFFLINE"));
+            assertThrows(IdentityConflictException.class, () -> store.reserveLegacy("[OFF]Bob", UUID.randomUUID(), "FLOODGATE"));
+            assertEquals("[OFF]Bob", store.resolveOffline("Bob", UUID.randomUUID(), "[OFF]", profile -> {}).profile().name());
+        }
+        try (IdentityStore store = new IdentityStore(directory.resolve("external-namespace.db"))) {
+            store.resolve(union("first", "Alice"), "[MUA]", AVAILABLE);
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bob", UUID.randomUUID(), "[mua]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bob", UUID.randomUUID(), "[M", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("[MUA]Bob", UUID.randomUUID(), "[OFF]", profile -> {}));
+            assertNull(store.findOfflineByAccountName("Bob"));
+            assertFalse(store.hasOfflineAliases());
+        }
+    }
+
+    @Test void offlineAccountCaseAndUuidCannotSilentlyChangeOrMerge() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-collisions.db"))) {
+            var original = store.resolveOffline("Alice", uuid, "[OFF]", profile -> {});
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("alice", uuid, "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("ALICE", UUID.randomUUID(), "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Alice", UUID.randomUUID(), "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bob", uuid, "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.assertOfflineAllowed("Other", uuid));
+            assertEquals(original, store.findOfflineByAccountName("ALICE"));
+            assertNull(store.findOfflineByAccountName("Bob"));
+            // The unchanged password database key remains reserved even though the local
+            // GameProfile is now namespaced; another identity may not take over that key.
+            assertThrows(IdentityConflictException.class, () -> store.resolve(union("raw-key", "Alice"), AVAILABLE));
+            assertThrows(IdentityConflictException.class, () -> store.reserveLegacy("Alice", UUID.randomUUID(), "OFFLINE"));
+        }
+    }
+
+    @Test void officialAndFloodgateIdentitiesCannotBeReusedByOfflineMapping() throws Exception {
+        UUID officialUuid = UUID.randomUUID();
+        UUID floodgateUuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-official.db"))) {
+            store.resolve(identity("official", SourceType.OFFICIAL, officialUuid.toString(), officialUuid, "Alice"), AVAILABLE);
+            store.reserveLegacy("Bedrock", floodgateUuid, "FLOODGATE");
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Alice", UUID.randomUUID(), "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bob", officialUuid, "[OFF]", profile -> {}));
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bedrock", floodgateUuid, "[OFF]", profile -> {}));
+            assertFalse(store.hasOfflineAliases());
+        }
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-target-collision.db"))) {
+            store.resolve(identity("official", SourceType.OFFICIAL, officialUuid.toString(), officialUuid, "[OFF]Bob"), AVAILABLE);
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Bob", UUID.randomUUID(), "[OFF]", profile -> {}));
+            assertNull(store.findOfflineByAccountName("Bob"));
+        }
+    }
+
+    @Test void offlineGuardFailureRollsBackCreationAndUpgradeAndRunsOnEveryReturn() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-guard.db"))) {
+            java.util.function.Consumer<IdentityStore.LocalProfile> reject = profile -> {
+                throw new IdentityConflictException("BACKEND_COLLISION", "Legacy account changed");
+            };
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Alice", uuid, "[OFF]", reject));
+            assertNull(store.findOfflineByAccountName("Alice"));
+            assertNull(store.findByUuid(uuid));
+            var raw = store.reserveLegacy("Alice", uuid, "OFFLINE");
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Alice", uuid, "[OFF]", reject));
+            assertEquals(raw, store.findByName("Alice"));
+            assertNull(store.findByName("[OFF]Alice"));
+            var mapped = store.resolveOffline("Alice", uuid, "[OFF]", profile -> {});
+            assertThrows(IdentityConflictException.class, () -> store.resolveOffline("Alice", uuid, "[NEW]", reject));
+            assertEquals(mapped, store.findOfflineByAccountName("Alice"));
+        }
+    }
+
+    @Test void failedOfflineRenameKeepsOriginalLedgerRowsAndCanRetry() throws Exception {
+        Path file = directory.resolve("offline-write-failure.db");
+        UUID uuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(file)) {
+            var raw = store.reserveLegacy("Alice", uuid, "OFFLINE");
+            try (var other = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = other.createStatement()) {
+                statement.execute("CREATE TRIGGER fail_rename BEFORE UPDATE ON profile BEGIN SELECT RAISE(ABORT, 'test write failure'); END");
+            }
+            assertThrows(java.sql.SQLException.class, () -> store.resolveOffline("Alice", uuid, "[OFF]", profile -> {}));
+            assertEquals(raw, store.findByName("Alice"));
+            assertNull(store.findByName("[OFF]Alice"));
+            assertFalse(store.hasOfflineAliases());
+            try (var other = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = other.createStatement()) {
+                statement.execute("DROP TRIGGER fail_rename");
+            }
+            assertEquals(raw.id(), store.resolveOffline("Alice", uuid, "[OFF]", profile -> {}).profile().id());
+        }
+    }
+
+    @Test void invalidOfflineNamesCannotCreateOrRenameProfiles() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        try (IdentityStore store = new IdentityStore(directory.resolve("offline-invalid.db"))) {
+            assertThrows(IllegalArgumentException.class, () -> store.resolveOffline("Alice", uuid, "[离线]", profile -> {}));
+            assertThrows(IllegalArgumentException.class, () -> store.resolveOffline("abcdefghijklmnop", uuid, "[OFF]", profile -> {}));
+            assertNull(store.findByUuid(uuid));
+            var raw = store.reserveLegacy("abcdefghijklmnop", uuid, "OFFLINE");
+            assertThrows(IllegalArgumentException.class, () -> store.resolveOffline("abcdefghijklmnop", uuid, "[OFF]", profile -> {}));
+            assertEquals(raw, store.findByUuid(uuid));
         }
     }
 

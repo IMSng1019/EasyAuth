@@ -9,7 +9,12 @@
       "xyz.nikitacartes.easyauth.EasyAuthMixinTest",
       "xyz.nikitacartes.easyauth.utils.TotpTest",
       "xyz.nikitacartes.easyauth.sources.MultiAuthRuntimeTest",
+      "xyz.nikitacartes.easyauth.sources.OfflineProfileRuntimeTest",
+      "xyz.nikitacartes.easyauth.sources.OfflineAdmissionRuntimeTest",
+      "xyz.nikitacartes.easyauth.sources.OfflineLoginRuntimeTest",
       "xyz.nikitacartes.easyauth.sources.CommandTargetRuntimeTest",
+      "xyz.nikitacartes.easyauth.sources.NameplateRuntimeTest",
+      "xyz.nikitacartes.easyauth.sources.OfflineAccountDatabaseRuntimeTest",
       "xyz.nikitacartes.easyauth.diagnostics.CombatDiagnosticsRuntimeTest",
       "xyz.nikitacartes.easyauth.skins.ServerSkinBridgeRuntimeTest",
       "xyz.nikitacartes.easyauth.skins.SkinBridgeLoginRuntimeTest"

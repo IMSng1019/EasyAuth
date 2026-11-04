@@ -457,8 +457,8 @@ public class AuthCommand {
             }
         });
 
-        ServerPlayer playerEntity = source.getServer().getPlayerList().getPlayerByName(username);
-        if (playerEntity != null && getUsername(playerEntity).equals(username)) {
+        ServerPlayer playerEntity = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
+        if (playerEntity != null && getUsername(playerEntity).equals(MultiAuth.onlineName(username))) {
             ((PlayerAuth) playerEntity).easyAuth$setAuthenticated(false);
             ((PlayerAuth) playerEntity).easyAuth$setPlayerEntryV1(new PlayerEntryV1(username));
             playerEntity.connection.disconnect(langConfig.account.dataDeleted.get());
@@ -521,7 +521,7 @@ public class AuthCommand {
             playerData.update();
 
             // Also update the cached PlayerEntryV1 if the player is online
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             if (player != null) {
                 PlayerEntryV1 cachedEntry = ((PlayerAuth) player).easyAuth$getPlayerEntryV1();
                 if (cachedEntry != null) {
@@ -606,7 +606,7 @@ public class AuthCommand {
                 return;
             }
 
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             PlayerEntryV1 entry;
             if (player != null) {
                 entry = ((PlayerAuth) player).easyAuth$getPlayerEntryV1();
@@ -630,7 +630,7 @@ public class AuthCommand {
      */
     public static int resetOtp(CommandSourceStack source, String username) {
         runDbTask(source, () -> {
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             PlayerEntryV1 entry = player != null
                     ? ((PlayerAuth) player).easyAuth$getPlayerEntryV1()
                     : DB.getUserData(username);
@@ -655,7 +655,7 @@ public class AuthCommand {
      * @return 1 on success
      */
     public static int forceLogin(CommandSourceStack source, String username) {
-        ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+        ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
         if (player == null) {
             langConfig.admin.forceLoginOffline.send(source, username);
             return 0;
@@ -714,8 +714,8 @@ public class AuthCommand {
         }
 
         MinecraftServer server = source.getServer();
-        if (server.getPlayerList().getPlayerByName(oldUsername) != null
-                || server.getPlayerList().getPlayerByName(newUsername) != null) {
+        if (server.getPlayerList().getPlayerByName(MultiAuth.onlineName(oldUsername)) != null
+                || server.getPlayerList().getPlayerByName(MultiAuth.onlineName(newUsername)) != null) {
             langConfig.admin.migratePlayerOnline.send(source);
             return 0;
         }
@@ -919,7 +919,7 @@ public class AuthCommand {
             langConfig.uuid.forcedSet.send(source, username, uuid.toString());
 
             // Kick the player if online so they rejoin with the new UUID
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             if (player != null) {
                 player.connection.disconnect(langConfig.uuid.changed.get());
             }
@@ -954,7 +954,7 @@ public class AuthCommand {
             langConfig.uuid.forcedCleared.send(source, username);
 
             // Kick the player if online so they rejoin with the default UUID
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             if (player != null) {
                 player.connection.disconnect(langConfig.uuid.changed.get());
             }
@@ -1007,7 +1007,7 @@ public class AuthCommand {
             message.append(Component.literal("\n"));
             
             // Current UUID (if online)
-            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(username);
+            ServerPlayer player = source.getServer().getPlayerList().getPlayerByName(MultiAuth.onlineName(username));
             message.append(Component.literal("  Current UUID: ").withStyle(ChatFormatting.GRAY));
             if (player != null) {
                 String currentUuid = player.getStringUUID();

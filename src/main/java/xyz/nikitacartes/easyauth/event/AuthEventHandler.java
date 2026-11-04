@@ -295,9 +295,19 @@ public class AuthEventHandler {
             return langConfig.error.database.getNonTranslatable();
         }
 
-        // Getting the player. By this point, the player's game profile has been authenticated so the UUID is legitimate.
+        // The profile has already been verified/allocated for this connection. A real-name
+        // prefix upgrade can change its name while the authenticated old session keeps its UUID.
         String incomingPlayerUsername = StoneCutterUtils.getName(profile);
         Player onlinePlayer = manager.getPlayerByName(incomingPlayerUsername);
+        if (onlinePlayer == null) {
+            UUID incomingUuid = StoneCutterUtils.getId(profile);
+            for (ServerPlayer candidate : manager.getPlayers()) {
+                if (candidate.getUUID().equals(incomingUuid)) {
+                    onlinePlayer = candidate;
+                    break;
+                }
+            }
+        }
 
         String ip = socketAddress.toString();
         if (ip.contains("/")) {
@@ -339,7 +349,7 @@ public class AuthEventHandler {
             return langConfig.error.database.getNonTranslatable();
         }
 
-        if (!extendedConfig.allowCaseInsensitiveUsername && !playerEntryV1.username.equals(incomingPlayerUsername)) {
+        if (!extendedConfig.allowCaseInsensitiveUsername && !playerEntryV1.username.equals(MultiAuth.accountName(incomingPlayerUsername))) {
             return langConfig.account.usernameCaseMismatch.getNonTranslatable(incomingPlayerUsername);
         }
 
@@ -372,9 +382,11 @@ public class AuthEventHandler {
         playerAuth.easyAuth$setPlayerEntryV1(cache);
 
         ConnectionProofs.Proof sourceProof = MultiAuth.consumeProof(connection, player.getGameProfile());
+        MultiAuth.OfflineProof offlineProof = MultiAuth.consumeOfflineProof(connection, player.getGameProfile());
         playerAuth.easyAuth$setExternalAuthentication(sourceProof != null && sourceProof.custom(),
                 sourceProof != null && sourceProof.relaxChatKeys());
-        playerAuth.easyAuth$setLocalNamePrefix(sourceProof == null ? "" : sourceProof.localNamePrefix());
+        playerAuth.easyAuth$setLocalNamePrefix(offlineProof != null ? offlineProof.namePrefix()
+                : sourceProof == null ? "" : sourceProof.localNamePrefix());
 
         playerAuth.easyAuth$setIpAddress(connection);
         playerAuth.easyAuth$setSkipAuth();
@@ -383,6 +395,8 @@ public class AuthEventHandler {
         // configured display text, never this session's origin or authentication state.
         if (FloodgateApiHelper.isFloodgatePlayer(player)) {
             playerAuth.easyAuth$setAuthenticationSource(AuthenticationChannel.FLOODGATE, null);
+        } else if (offlineProof != null) {
+            playerAuth.easyAuth$setAuthenticationSource(AuthenticationChannel.OFFLINE, null);
         } else if (sourceProof != null) {
             playerAuth.easyAuth$setAuthenticationSource(AuthenticationChannel.valueOf(sourceProof.sourceType().name()),
                     sourceProof.sourceId());

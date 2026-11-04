@@ -15,7 +15,7 @@ import java.util.EnumSet;
 import java.util.Collection;
 import java.util.List;
 
-/** Chat/TAB presentation only: no GameProfile, scoreboard membership or identity changes. */
+/** Source display metadata and TAB refreshes; never changes persisted account identity. */
 public final class SourceNameDisplay {
     private SourceNameDisplay() {}
 
@@ -25,7 +25,7 @@ public final class SourceNameDisplay {
         PlayerAuth auth = (PlayerAuth) player;
         AuthenticationChannel channel = auth.easyAuth$getAuthenticationChannel();
         if (channel == null) return ""; // A display hook may run before ServerPlayer fields initialize.
-        if ((channel == AuthenticationChannel.UNION || channel == AuthenticationChannel.SKIN_SITE)
+        if ((channel == AuthenticationChannel.UNION || channel == AuthenticationChannel.SKIN_SITE || channel == AuthenticationChannel.OFFLINE)
                 && auth.easyAuth$getLocalNamePrefix() != null && !auth.easyAuth$getLocalNamePrefix().isEmpty()) {
             // The creation-time namespace is already part of the real, persisted GameProfile
             // name. Do not infer this from startsWith(), and never rename it during config reload.

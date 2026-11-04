@@ -23,6 +23,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -41,6 +43,14 @@ public final class MultiAuth {
     private static SourceAuthenticator authenticator;
     private static volatile ServerSkinBridge skinBridge;
     private static final ConnectionProofs<Connection> PROOFS = new ConnectionProofs<>();
+    private static final Map<Connection, OfflineProof> OFFLINE_PROOFS = new WeakHashMap<>();
+
+    /** Allocation evidence only; this never grants password, session or 2FA authentication. */
+    public record OfflineProof(UUID uuid, String name, String accountName, String namePrefix) {
+        private boolean matches(GameProfile profile) {
+            return uuid.equals(StoneCutterUtils.getId(profile)) && name.equals(StoneCutterUtils.getName(profile));
+        }
+    }
     // Slow external providers cannot consume the password lane or spawn unbounded coordinators.
     private static final ThreadPoolExecutor PASSWORD_LOGINS = loginLane(8, "password");
     private static final ThreadPoolExecutor PROVIDER_LOGINS = loginLane(64, "provider");
@@ -82,7 +92,7 @@ public final class MultiAuth {
 
     public static void validate(SourcesConfig candidate, ExtendedConfigV1 extended, ProxyConfigV1 proxy) {
         //? if < 1.20.3 || >= 1.20.5 {
-        if (!candidate.usesLegacyAuthentication()) {
+        if (!candidate.usesLegacyAuthentication() || !candidate.offlineNamePrefix().isEmpty()) {
             throw new IllegalArgumentException("Configured authentication sources are supported by the Minecraft 1.20.4 Fabric artifact only");
         }
         //?}
@@ -91,6 +101,9 @@ public final class MultiAuth {
         }
         if (!candidate.usesLegacyAuthentication() && proxy != null && proxy.enabled) {
             throw new IllegalArgumentException("sources.json: configured sources require direct Fabric login; disable the proxy bridge");
+        }
+        if (!candidate.offlineNamePrefix().isEmpty() && proxy != null && proxy.enabled) {
+            throw new IllegalArgumentException("Offline real-name prefixes require direct server login; disable the proxy bridge");
         }
     }
 
@@ -117,9 +130,64 @@ public final class MultiAuth {
         return config != null && !config.usesLegacyAuthentication();
     }
 
+    /** Resolve only a persisted local alias, never a guessed prefix or an arbitrary raw name. */
+    public static String accountName(String localName) {
+        try {
+            IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByLocalName(localName);
+            return mapping == null ? localName : mapping.accountName();
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot resolve offline account identity", e);
+        }
+    }
+
+    public static String onlineName(String accountName) {
+        try {
+            IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByAccountName(accountName);
+            return mapping == null ? accountName : mapping.profile().name();
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot resolve offline player identity", e);
+        }
+    }
+
+    public static boolean offlineNamesEnabled() {
+        try {
+            return (current != null && !current.offlineNamePrefix().isBlank())
+                    || (identities != null && identities.hasOfflineAliases());
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot check offline identity mappings", e);
+        }
+    }
+
+    public static boolean hasOfflineAccount(String rawName) {
+        try {
+            IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByAccountName(rawName);
+            return mapping != null && !mapping.profile().namePrefix().isEmpty();
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot check offline account reservation", e);
+        }
+    }
+
+    public static boolean isReservedOfflineName(String name) {
+        try {
+            return (current != null && current.isReservedOfflineName(name))
+                    || (identities != null && identities.isReservedOfflineName(name));
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot check offline name namespace", e);
+        }
+    }
+
+    /** The bare-name parser accepts allocated names only; quoting remains vanilla-compatible. */
+    public static boolean allocatedCommandName(String name) {
+        try {
+            return protectedName(name) || (identities != null && identities.findOfflineByLocalName(name) != null);
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot check allocated command name", e);
+        }
+    }
+
     public static boolean preventAutomaticMigration() {
         try {
-            return enabled() || (identities != null && identities.hasCustomIdentities());
+            return enabled() || (identities != null && (identities.hasCustomIdentities() || identities.hasOfflineAliases()));
         } catch (Exception e) {
             // An unreadable ledger must never cause UUID reassignment or migration.
             throw new IllegalStateException("Cannot check identity ledger", e);
@@ -156,7 +224,7 @@ public final class MultiAuth {
     /** Only exempts a server-allocated name from the legacy username-format regex. */
     public static boolean isReservedCustomProfileName(String name, UUID uuid) {
         try {
-            if (identities == null || !identities.isProtectedName(name)) return false;
+            if (identities == null || (!identities.isProtectedName(name) && identities.findOfflineByLocalName(name) == null)) return false;
             IdentityStore.LocalProfile profile = identities.findByName(name);
             return profile != null && profile.name().equals(name) && profile.uuid().equals(uuid)
                     && ExternalProfileNames.localName("", name).equals(name);
@@ -235,7 +303,8 @@ public final class MultiAuth {
 
     /** Hello UUID is a routing hint only. It never grants authentication. */
     public static boolean shouldUsePasswordPath(SourcesConfig snapshot, String name, UUID claimedUuid) {
-        if (protectedName(name) || snapshot.isReservedCustomName(name) || reservedCustomName(name)) return false;
+        if (protectedName(name) || snapshot.isReservedCustomName(name) || reservedCustomName(name)
+                || isReservedOfflineName(name)) return false;
         PlayerEntryV1 existing = DB.getUserData(name);
         if (existing != null && existing.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) return false;
         if (snapshot.isExplicitOfflineName(name)) return true;
@@ -274,7 +343,7 @@ public final class MultiAuth {
             address = socket.getAddress();
         }
         Optional<AuthenticatedIdentity> result = authenticator.authenticate(snapshot, username, serverDigest, address);
-        if (result.isEmpty()) return CompletableFuture.completedFuture(preparePassword(server, username));
+        if (result.isEmpty()) return CompletableFuture.completedFuture(preparePassword(server, connection, snapshot, username));
         AuthenticatedIdentity identity = result.get();
         VerifiedProfile verified = prepareVerified(server, identity, snapshot);
         SourcesConfig.Source source = snapshot.sources().stream()
@@ -351,61 +420,138 @@ public final class MultiAuth {
 
     /** Password fallback keeps the effective legacy UUID and must never claim a source identity. */
     public static GameProfile preparePassword(MinecraftServer server, String username) throws Exception {
+        return preparePassword(server, null, current, username);
+    }
+
+    public static GameProfile preparePassword(MinecraftServer server, Connection connection,
+                                              SourcesConfig snapshot, String username) throws Exception {
         requireDatabase();
-        if (reservedCustomName(username)) throw new IllegalStateException("This name namespace requires verified source authentication");
+        if (reservedCustomName(username) || isReservedOfflineName(username)
+                || (snapshot != null && snapshot.isReservedOfflineName(username))) {
+            throw new IllegalStateException("Use your original launcher name; this prefix is allocated by the server");
+        }
         PlayerEntryV1 existing = DB.getUserData(username);
         if (protectedName(username)) throw new IllegalStateException("This name belongs to an external identity; sign in using its authentication source");
         if (existing != null && existing.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) {
             throw new IllegalStateException("Mojang authentication failed for a protected premium account");
+        }
+        if (existing != null && !extendedConfig.allowCaseInsensitiveUsername && !existing.username.equals(username)) {
+            throw new IllegalStateException("Use the exact original account name: " + existing.username);
         }
         if (server.usesAuthentication() && extendedConfig.preventOfflinePlayersWithOnlineUsernames
                 && (existing == null || existing.onlineAccount != PlayerEntryV1.OnlineAccount.FALSE)) {
             UUID onlineUuid = xyz.nikitacartes.easyauth.integrations.MojangApi.getUuid(username);
             if (onlineUuid != null) throw new IllegalStateException("This username requires Mojang authentication");
         }
-        return reservePassword(username);
+        IdentityStore.OfflineProfile allocated = reservePassword(username, snapshot);
+        IdentityStore.LocalProfile local = allocated.profile();
+        GameProfile profile = new GameProfile(local.uuid(), local.name());
+        if (connection != null && !local.namePrefix().isEmpty()) {
+            synchronized (OFFLINE_PROOFS) {
+                OFFLINE_PROOFS.put(connection, new OfflineProof(local.uuid(), local.name(), allocated.accountName(), local.namePrefix()));
+            }
+        }
+        return profile;
     }
 
-    private static synchronized GameProfile reservePassword(String username) throws Exception {
+    private static synchronized IdentityStore.OfflineProfile reservePassword(String username, SourcesConfig snapshot) throws Exception {
         requireDatabase();
-        if (reservedCustomName(username)) throw new IllegalStateException("This name namespace cannot be registered as a local password account");
+        if (reservedCustomName(username) || isReservedOfflineName(username)) {
+            throw new IllegalStateException("This name namespace cannot be registered as a raw password account");
+        }
         PlayerEntryV1 entry = DB.getUserData(username);
         if (entry != null && entry.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) {
             throw new IllegalStateException("Premium account cannot fall back to password login");
         }
-        UUID uuid = UUIDUtil.createOfflinePlayerUUID(username);
+        if (entry != null && !extendedConfig.allowCaseInsensitiveUsername && !entry.username.equals(username)) {
+            throw new IllegalStateException("Use the exact original account name: " + entry.username);
+        }
+        String accountName = entry == null ? username : entry.username;
+        UUID uuid = UUIDUtil.createOfflinePlayerUUID(accountName);
         if (entry != null && entry.forcedUuid != null && !entry.forcedUuid.isEmpty()) uuid = UUID.fromString(entry.forcedUuid);
         if (entry != null && effectiveUuid(entry) != null && !effectiveUuid(entry).equals(uuid)) {
             throw new IllegalStateException("Stored UUID differs from password UUID; automatic migration is disabled");
         }
         for (PlayerEntryV1 other : DB.getAllDataStrict().values()) {
-            if (!other.username.equalsIgnoreCase(username)
+            if (!other.username.equalsIgnoreCase(accountName)
                     && (uuid.equals(other.uuid) || uuid.equals(effectiveUuid(other)))) {
                 throw new IllegalStateException("Another legacy account reserves the password UUID");
             }
         }
-        identities.assertOfflineAllowed(username, uuid);
-        identities.reserveLegacy(username, uuid, "OFFLINE");
+        String configuredPrefix = snapshot == null ? "" : snapshot.offlineNamePrefix();
+        IdentityStore.OfflineProfile previous = identities.findOfflineByAccountName(accountName);
+        IdentityStore.OfflineProfile allocated;
+        if (configuredPrefix.isBlank() && (previous == null || previous.profile().namePrefix().isEmpty())) {
+            // Preserve legacy Unicode/format policies when real-name prefixes are disabled.
+            identities.assertOfflineAllowed(accountName, uuid);
+            allocated = new IdentityStore.OfflineProfile(identities.reserveLegacy(accountName, uuid, "OFFLINE"), accountName);
+        } else {
+            UUID expectedUuid = uuid;
+            allocated = identities.resolveOffline(accountName, uuid, configuredPrefix, candidate -> {
+                if (previous == null || previous.profile().namePrefix().isEmpty()) {
+                    String owner = snapshot == null ? null : snapshot.reservedNameSource(candidate.name());
+                    if (owner != null && !owner.equals(IdentityStore.OFFLINE_SOURCE_ID)) {
+                        throw new IdentityConflictException("SOURCE_NAMESPACE_COLLISION", "Offline name overlaps another authentication source");
+                    }
+                }
+                for (PlayerEntryV1 stored : DB.getAllDataStrict().values()) {
+                    if (stored.username.equalsIgnoreCase(accountName)) {
+                        if (stored.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE
+                                || (effectiveUuid(stored) != null && !expectedUuid.equals(effectiveUuid(stored)))) {
+                            throw new IllegalStateException("Stored account ownership differs from the offline identity");
+                        }
+                    } else if (stored.username.equalsIgnoreCase(candidate.name())
+                            || expectedUuid.equals(stored.uuid) || expectedUuid.equals(effectiveUuid(stored))) {
+                        throw new IdentityConflictException("LEGACY_IDENTITY_COLLISION", "Another password account reserves the local name or UUID");
+                    }
+                }
+            });
+        }
         if (entry == null) {
-            entry = new PlayerEntryV1(username, uuid);
+            entry = new PlayerEntryV1(accountName, uuid);
             if (config.offlineByDefault) entry.onlineAccount = PlayerEntryV1.OnlineAccount.FALSE;
             DB.registerUser(entry);
         } else if (entry.uuid == null) {
             entry.uuid = uuid;
             if (!DB.updateUserData(entry)) throw new IllegalStateException("Could not persist password profile");
         }
-        PlayerEntryV1 persisted = DB.getUserData(username);
-        if (persisted == null || !uuid.equals(effectiveUuid(persisted))) throw new IllegalStateException("Password profile could not be persisted");
-        PlayersCache.put(username, persisted);
-        return new GameProfile(uuid, username);
+        PlayerEntryV1 persisted = DB.getUserData(accountName);
+        if (persisted == null || !uuid.equals(effectiveUuid(persisted))
+                || persisted.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE) {
+            throw new IllegalStateException("Password profile could not be persisted or its ownership changed");
+        }
+        PlayersCache.put(accountName, persisted);
+        return allocated;
     }
 
     public static void beforeVerification(Connection connection, GameProfile profile) {
         UUID uuid = StoneCutterUtils.getId(profile);
         String name = StoneCutterUtils.getName(profile);
-        if (PROOFS.get(connection, uuid, name) != null) return;
-        if (protectedName(name) || protectedUuid(uuid)) {
-            throw new IllegalStateException("This external identity requires a freshly verified source session");
+        if (PROOFS.get(connection, uuid, name) != null || hasOfflineProof(connection, profile)) return;
+        boolean allocatedOfflineUuid = false;
+        try {
+            IdentityStore.LocalProfile byUuid = identities == null ? null : identities.findByUuid(uuid);
+            allocatedOfflineUuid = byUuid != null && identities.findOfflineByLocalName(byUuid.name()) != null;
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot verify offline identity ownership", e);
+        }
+        if (protectedName(name) || protectedUuid(uuid) || allocatedOfflineUuid
+                || isReservedOfflineName(name) || hasOfflineAccount(name)) {
+            throw new IllegalStateException("This allocated identity requires evidence from this login connection");
+        }
+    }
+
+    public static boolean hasOfflineProof(Connection connection, GameProfile profile) {
+        synchronized (OFFLINE_PROOFS) {
+            OfflineProof proof = OFFLINE_PROOFS.get(connection);
+            return proof != null && proof.matches(profile);
+        }
+    }
+
+    public static OfflineProof consumeOfflineProof(Connection connection, GameProfile profile) {
+        synchronized (OFFLINE_PROOFS) {
+            OfflineProof proof = OFFLINE_PROOFS.remove(connection);
+            return proof != null && proof.matches(profile) ? proof : null;
         }
     }
 
@@ -415,11 +561,13 @@ public final class MultiAuth {
 
     public static void forget(Connection connection) {
         PROOFS.remove(connection);
+        synchronized (OFFLINE_PROOFS) { OFFLINE_PROOFS.remove(connection); }
     }
 
     public static boolean rejectIdentityEdit(CommandSourceStack source, String name) {
         try {
-            if (identities == null || identities.findByName(name) == null) return false;
+            if (identities == null || (identities.findByName(name) == null
+                    && identities.findOfflineByAccountName(name) == null)) return false;
             source.sendFailure(Component.literal("[EasyAuth] This account is reserved by the identity ledger. Legacy rename, UUID, premium and removal commands cannot change its identity."));
         } catch (Exception e) {
             source.sendFailure(Component.literal("[EasyAuth] Identity ledger unavailable; change refused."));
@@ -442,9 +590,11 @@ public final class MultiAuth {
     /** Updating a legacy account's password does not change its identity. */
     public static boolean rejectExternalRegistration(CommandSourceStack source, String name) {
         try {
-            if (!protectedName(name) && !reservedCustomName(name)) return false;
+            boolean unallocatedOfflineName = isReservedOfflineName(name)
+                    && (identities == null || identities.findOfflineByLocalName(name) == null);
+            if (!protectedName(name) && !reservedCustomName(name) && !unallocatedOfflineName) return false;
             source.sendFailure(Component.literal("[EasyAuth] External identities authenticate with their source and cannot be registered as local accounts."));
-        } catch (RuntimeException e) {
+        } catch (Exception e) {
             source.sendFailure(Component.literal("[EasyAuth] Identity ledger unavailable; change refused."));
             LogError("External registration refused", e);
         }

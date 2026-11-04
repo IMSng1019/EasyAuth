@@ -24,6 +24,7 @@ import java.util.regex.PatternSyntaxException;
 public final class SourcesConfig {
     public static final String OFFICIAL_HAS_JOINED = "https://sessionserver.mojang.com/session/minecraft/hasJoined";
     public static final String OFFICIAL_PROFILE = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}?unsigned=false";
+    public static final String OFFLINE_SOURCE_ID = "__easyauth_offline";
     private static final String SESSION_PATH = "/sessionserver/session/minecraft/hasJoined";
     private static final String DEFAULT_JSON = """
             {
@@ -131,6 +132,12 @@ public final class SourcesConfig {
             }
             List<Pattern> offlineNames = offlineNames(root);
             String offlineNamePrefix = prefix(root, "offlineNamePrefix");
+            String offlineNamespace;
+            try {
+                offlineNamespace = ExternalProfileNames.normalizePrefix(offlineNamePrefix).toLowerCase(Locale.ROOT);
+            } catch (IllegalArgumentException e) {
+                throw invalid("offlineNamePrefix: " + e.getMessage());
+            }
             String floodgateNamePrefix = prefix(root, "floodgateNamePrefix");
             if (!root.has("sources") || !root.get("sources").isJsonArray()) throw invalid("sources must be an array");
             JsonArray array = root.getAsJsonArray("sources");
@@ -139,6 +146,7 @@ public final class SourcesConfig {
             Set<Integer> priorities = new HashSet<>();
             List<Source> sources = new ArrayList<>();
             List<NameNamespace> namespaces = new ArrayList<>();
+            if (!offlineNamespace.isEmpty()) namespaces.add(new NameNamespace(OFFLINE_SOURCE_ID, offlineNamespace));
             int officialCount = 0;
             for (JsonElement element : array) {
                 if (!element.isJsonObject()) throw invalid("each source must be an object");
@@ -394,7 +402,14 @@ public final class SourcesConfig {
         return null;
     }
 
-    public boolean isReservedCustomName(String localName) { return reservedNameSource(localName) != null; }
+    public boolean isReservedCustomName(String localName) {
+        String owner = reservedNameSource(localName);
+        return owner != null && !owner.equals(OFFLINE_SOURCE_ID);
+    }
+
+    public boolean isReservedOfflineName(String localName) {
+        return OFFLINE_SOURCE_ID.equals(reservedNameSource(localName));
+    }
 
     /** Name prefix settings do not activate an authentication source. */
     public boolean usesLegacyAuthentication() {

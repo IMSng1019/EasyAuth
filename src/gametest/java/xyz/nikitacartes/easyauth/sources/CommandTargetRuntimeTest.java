@@ -22,6 +22,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.commands.synchronization.SuggestionProviders;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.PacketListener;
@@ -35,6 +36,10 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
+import xyz.nikitacartes.easyauth.event.AuthEventHandler;
+import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
+import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
+import xyz.nikitacartes.easyauth.utils.PlayersCache;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.UUID;
@@ -112,8 +117,133 @@ public class CommandTargetRuntimeTest {
         context.succeed();
     }
 
+    //? if >= 1.21.5 {
+    @GameTest
+    //?} else {
+    /*@GameTest(template = EMPTY_STRUCTURE)
+    *///?}
+    public void offlineNamesKeepPrefixesAndUsableCommandSuggestions(GameTestHelper context) throws Exception {
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*var server = context.getLevel().getServer();
+        var snapshotField = MultiAuth.class.getDeclaredField("current");
+        snapshotField.setAccessible(true);
+        Object previousSnapshot = snapshotField.get(null);
+        var configFile = Files.createTempFile("easyauth-offline-command-names-", ".json");
+        var players = new java.util.ArrayList<ServerPlayer>();
+        String prefix = "[OFF] ";
+        try {
+            Files.writeString(configFile, "{\"configVersion\":1,\"offlineNamePrefix\":\"[OFF] \",\"sources\":[]}");
+            SourcesConfig prefixed = SourcesConfig.load(configFile);
+            snapshotField.set(null, prefixed);
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            ServerPlayer operator = player(context, new GameProfile(UUID.randomUUID(), "Op" + suffix));
+            players.add(operator);
+            ((PlayerAuth) operator).easyAuth$setAuthenticated(true);
+            server.getPlayerList().getPlayers().add(operator);
+
+            // These are admitted offline profiles, including names allowed by a custom
+            // username regex. None has an external identity ledger entry.
+            for (String name : List.of("Local" + suffix, "玩家" + suffix, "[Off]" + suffix)) {
+                UUID offlineUuid = UUIDUtil.createOfflinePlayerUUID(name);
+                ServerPlayer target = player(context, new GameProfile(offlineUuid, name));
+                players.add(target);
+                PlayerEntryV1 entry = PlayersCache.getOrCreate(name);
+                entry.uuid = offlineUuid;
+                entry.onlineAccount = PlayerEntryV1.OnlineAccount.FALSE;
+                AuthEventHandler.loadPlayerData(target, ((CommandTestPlayer) target).transport);
+                PlayerAuth auth = (PlayerAuth) target;
+                check(auth.easyAuth$getAuthenticationChannel() == AuthenticationChannel.OFFLINE,
+                        "Loading the offline account selected the wrong display channel");
+                server.getPlayerList().getPlayers().add(target);
+                check(!MultiAuth.protectedName(name), "Offline fixture unexpectedly has an external ledger identity");
+                check(target.getDisplayName().getString().equals(prefix + name), "Offline chat prefix is missing or duplicated");
+                check(target.getTabListDisplayName() != null
+                                && target.getTabListDisplayName().getString().equals(prefix + name),
+                        "Offline TAB prefix is missing or duplicated");
+
+                String partial = name.substring(0, 3);
+                for (String input : List.of("tp ", "tp " + partial, "tp \"" + partial, "tp '" + partial,
+                        "tp [OFF]", "tp \"[OFF]")) {
+                    verifyOfflineSuggestion(context, operator, target, input, prefix);
+                }
+                check(target.getUUID().equals(offlineUuid) && target.getGameProfile().getName().equals(name),
+                        "Display or command completion changed the offline account identity");
+            }
+
+            // Reloading a cosmetic prefix does not alter target names, including when it is cleared.
+            snapshotField.set(null, SourcesConfig.defaults());
+            for (ServerPlayer target : players.subList(1, players.size())) {
+                check(target.getDisplayName().getString().equals(target.getGameProfile().getName())
+                                && target.getTabListDisplayName() == null,
+                        "Clearing the offline prefix did not restore vanilla display");
+                verifyOfflineSuggestion(context, operator, target, "tp ", "");
+                verifyOfflineSuggestion(context, operator, target,
+                        "tp \"" + target.getGameProfile().getName().substring(0, 3), "");
+            }
+            snapshotField.set(null, prefixed);
+
+            var dispatcher = server.getCommands().getDispatcher();
+            var source = operator.createCommandSourceStack();
+            for (ServerPlayer target : players.subList(1, players.size())) {
+                server.getPlayerList().getPlayers().remove(target);
+            }
+            for (String input : List.of("tp ", "tp [OFF]")) {
+                var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse(input, source)).join();
+                for (ServerPlayer target : players.subList(1, players.size())) {
+                    String quoted = StringArgumentType.escapeIfRequired(target.getGameProfile().getName());
+                    check(suggestions.getList().stream().noneMatch(suggestion -> suggestion.getText().equals(quoted)),
+                            "Disconnected offline account leaked into online player suggestions");
+                }
+            }
+        } finally {
+            server.getPlayerList().getPlayers().removeAll(players);
+            snapshotField.set(null, previousSnapshot);
+            Files.deleteIfExists(configFile);
+        }
+        *///?}
+        context.succeed();
+    }
+
     //? if >= 1.20.3 && < 1.20.5 {
-    /*private static void verifySuggestions(GameTestHelper context, ServerPlayer official, String localName,
+    /*private static void verifyOfflineSuggestion(GameTestHelper context, ServerPlayer operator,
+                                                ServerPlayer target, String input, String prefix) throws Exception {
+        var dispatcher = context.getLevel().getServer().getCommands().getDispatcher();
+        var source = operator.createCommandSourceStack();
+        String name = target.getGameProfile().getName();
+        String quoted = StringArgumentType.escapeIfRequired(name);
+        CaptureConnection transport = ((CommandTestPlayer) operator).transport;
+        transport.suggestions = null;
+        operator.connection.handleCustomCommandSuggestions(new ServerboundCommandSuggestionPacket(41, input));
+        check(transport.suggestions != null && transport.suggestions.getId() == 41,
+                "Server did not send the offline-name suggestion packet");
+        FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        com.mojang.brigadier.suggestion.Suggestions suggestions;
+        try {
+            transport.suggestions.write(buffer);
+            suggestions = new ClientboundCommandSuggestionsPacket(buffer).getSuggestions();
+            check(!buffer.isReadable(), "Offline-name suggestion packet left unread bytes");
+        } finally {
+            buffer.release();
+        }
+        var selected = suggestions.getList().stream().filter(suggestion -> suggestion.getText().equals(quoted))
+                .findFirst().orElseThrow(() -> new AssertionError("Offline name missing from completion for: " + input));
+        check(prefix.isEmpty() ? selected.getTooltip() == null
+                        : selected.getTooltip() != null && selected.getTooltip().getString().equals(prefix + name),
+                "Command suggestion does not show the offline display prefix for: " + input);
+        if (!quoted.equals(name)) {
+            check(suggestions.getList().stream().noneMatch(suggestion -> suggestion.getText().equals(name)),
+                    "Offline special name was suggested without required quotes");
+        }
+        String completed = selected.apply(input);
+        check(completed.equals("tp " + quoted), "Completion inserted a display name instead of the real account name");
+        check(!dispatcher.parse(completed, source).getReader().canRead(), "Completed offline name is not valid command syntax");
+        operator.setPos(10, 70, 10);
+        target.setPos(25, 70, 40);
+        check(dispatcher.execute(completed, source) == 1 && operator.position().equals(target.position()),
+                "Selecting the offline suggestion did not teleport to the intended player");
+    }
+
+    private static void verifySuggestions(GameTestHelper context, ServerPlayer official, String localName,
                                           String rawName, java.lang.reflect.Field ledgerField, IdentityStore ledger) throws Exception {
         var server = context.getLevel().getServer();
         var dispatcher = server.getCommands().getDispatcher();

@@ -243,6 +243,7 @@ public abstract class ServerPlayerMixin extends EntityMixin implements PlayerAut
     @Override
     public void easyAuth$setUsingMojangAccount() {
         isUsingMojangAccount = !easyAuth$externalAuthenticated && server.usesAuthentication()
+                && !(easyAuth$authenticationChannel == AuthenticationChannel.OFFLINE && !easyAuth$localNamePrefix.isEmpty())
                 && playerEntryV1.onlineAccount == PlayerEntryV1.OnlineAccount.TRUE;
     }
 

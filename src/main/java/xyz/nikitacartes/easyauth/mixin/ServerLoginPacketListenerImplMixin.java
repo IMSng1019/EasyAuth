@@ -1,6 +1,8 @@
 package xyz.nikitacartes.easyauth.mixin;
 
 import com.mojang.authlib.GameProfile;
+import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.Connection;
@@ -61,6 +63,20 @@ public abstract class ServerLoginPacketListenerImplMixin {
     @Unique
     private String easyAuth$sourceUsername;
 
+    //? if >= 1.20.3 && < 1.20.5 {
+    /*@Unique
+    private SourcesConfig easyAuth$passwordSnapshot;
+
+    @Unique
+    private String easyAuth$passwordUsername;
+
+    @Unique
+    private boolean easyAuth$passwordRoute;
+
+    @Unique
+    private boolean easyAuth$passwordRouteEligible;
+    *///?}
+
     @Unique
     private static final Pattern pattern = Pattern.compile("^[a-zA-Z0-9_]{1,16}$");
 
@@ -88,6 +104,24 @@ public abstract class ServerLoginPacketListenerImplMixin {
     )
     private void checkPremium(ServerboundHelloPacket packet, CallbackInfo ci) {
         String username = packet.name();
+
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*try {
+            // These local names are allocated by this server, never accepted as launcher
+            // names. Check before any legacy cache/DB registration, including Floodgate.
+            if (MultiAuth.isReservedOfflineName(username)) {
+                throw new IllegalStateException("This offline name is server-allocated; connect with your original username");
+            }
+            easyAuth$passwordSnapshot = MultiAuth.snapshot();
+            easyAuth$passwordUsername = username;
+            easyAuth$passwordRouteEligible = !FloodgateApiHelper.isFloodgatePlayer(packet.profileId());
+            easyAuth$passwordRoute = !server.usesAuthentication() && easyAuth$passwordRouteEligible;
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+            ci.cancel();
+            return;
+        }
+        *///?}
 
         LogDebug("UUID of player " + username + " is " + packet.profileId());
 
@@ -128,6 +162,25 @@ public abstract class ServerLoginPacketListenerImplMixin {
             ci.cancel();
             return;
         }
+
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*try {
+            // An allocated password account remains a password account even if its legacy
+            // premium flag is UNKNOWN and another client presents a matching Mojang UUID.
+            // Configured external-source routing already returned above, preserving MUA's
+            // separate authenticated namespace for the same original launcher name.
+            if (easyAuth$passwordRouteEligible && MultiAuth.hasOfflineAccount(username)) {
+                state = getReadyState();
+                authenticatedProfile = getGameProfile(username);
+                ci.cancel();
+                return;
+            }
+        } catch (Exception e) {
+            easyAuth$rejectSourceLogin(e);
+            ci.cancel();
+            return;
+        }
+        *///?}
 
         if (server.usesAuthentication()) {
             try {
@@ -210,6 +263,11 @@ public abstract class ServerLoginPacketListenerImplMixin {
 
     @Unique
     private GameProfile getGameProfile(String name) {
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*// Every legacy password branch uses this helper. The separate source snapshot
+        // must remain unset here, so premium handshakes still follow their existing route.
+        easyAuth$passwordRoute = easyAuth$passwordRouteEligible;
+        *///?}
         // Check if player has a forced UUID set
         PlayerEntryV1 playerData = PlayersCache.get(name);
         if (playerData != null && playerData.forcedUuid != null && !playerData.forcedUuid.isEmpty()) {
@@ -247,6 +305,21 @@ public abstract class ServerLoginPacketListenerImplMixin {
         return uuid.isPresent() && uuid.get().equals(onlineUuid);
     }
 
+    @Unique
+    private GameProfile easyAuth$prepareOfflineName(GameProfile profile) throws Exception {
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*boolean capturedPrefix = easyAuth$passwordSnapshot != null && !easyAuth$passwordSnapshot.offlineNamePrefix().isBlank();
+        if (easyAuth$passwordRoute && (capturedPrefix || MultiAuth.offlineNamesEnabled())
+                && !MultiAuth.hasOfflineProof(connection, profile)) {
+            profile = MultiAuth.preparePassword(server, connection, easyAuth$passwordSnapshot, easyAuth$passwordUsername);
+            // Duplicate-login waiting and configuration handoff read this field again;
+            // changing only the verification method's parameter would lose the local name.
+            authenticatedProfile = profile;
+        }
+        *///?}
+        return profile;
+    }
+
     //? if >= 1.20.2 && < 1.21.9 {
     /*// The original method has already verified the challenge, derived this signed digest and
     // enabled encryption. Reuse that exact digest; never recompute from a different server id.
@@ -267,7 +340,7 @@ public abstract class ServerLoginPacketListenerImplMixin {
     private void easyAuth$completeSourceLogin(String digest) {
         try {
             if (digest == null) {
-                easyAuth$publishSourceProfile(MultiAuth.preparePassword(server, easyAuth$sourceUsername));
+                easyAuth$publishSourceProfile(MultiAuth.preparePassword(server, connection, easyAuth$sourceSnapshot, easyAuth$sourceUsername));
                 return;
             }
             MultiAuth.authenticateAsync(server, connection, easyAuth$sourceSnapshot, easyAuth$sourceUsername, digest)
@@ -299,14 +372,14 @@ public abstract class ServerLoginPacketListenerImplMixin {
                 Component.literal("[EasyAuth] " + error.getMessage()));
     }
 
-    @Inject(method = "verifyLoginAndFinishConnectionSetup(Lcom/mojang/authlib/GameProfile;)V",
-            at = @At("HEAD"), cancellable = true)
-    private void easyAuth$guardReservedIdentity(GameProfile profile, CallbackInfo ci) {
+    @WrapMethod(method = "verifyLoginAndFinishConnectionSetup(Lcom/mojang/authlib/GameProfile;)V")
+    private void easyAuth$guardReservedIdentity(GameProfile profile, Operation<Void> original) {
         try {
+            profile = easyAuth$prepareOfflineName(profile);
             MultiAuth.beforeVerification(connection, profile);
+            original.call(profile);
         } catch (Exception e) {
             easyAuth$rejectSourceLogin(e);
-            ci.cancel();
         }
     }
 

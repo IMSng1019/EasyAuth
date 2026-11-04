@@ -146,13 +146,13 @@ class SourcesConfigTest {
         assertTrue(config.usesLegacyAuthentication());
     }
 
-    @Test void unicodeAndSpacingArePreservedWithoutFormattingParsing() throws Exception {
-        SourcesConfig config = loadPrefixes("\"offlineNamePrefix\":\"  离线  \",\"floodgateNamePrefix\":\"[基岩🎮] \",",
+    @Test void officialAndFloodgateUnicodeLabelsKeepTheirDisplayFormatting() throws Exception {
+        SourcesConfig config = loadPrefixes("\"offlineNamePrefix\":\" [OFF] \",\"floodgateNamePrefix\":\"[基岩🎮] \",",
                 "[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"timeoutMillis\":2000,\"namePrefix\":\"<red>[正版]</red> \"}]");
         assertEquals("<red>[正版]</red> ", config.namePrefix("official"));
-        assertEquals("  离线  ", config.offlineNamePrefix());
+        assertEquals(" [OFF] ", config.offlineNamePrefix());
         assertEquals("[基岩🎮] ", config.floodgateNamePrefix());
-        assertTrue(config.usesLegacyAuthentication(), "Display-only configuration must not enable managed authentication");
+        assertTrue(config.usesLegacyAuthentication(), "Name prefixes must not enable managed authentication");
         assertFalse(config.hasCustomSources());
     }
 
@@ -176,16 +176,74 @@ class SourcesConfigTest {
 
     @Test void namePrefixLengthCountsUnicodeCodePoints() throws Exception {
         String maximum = "🎮".repeat(64);
-        for (String key : new String[]{"namePrefix", "offlineNamePrefix", "floodgateNamePrefix"}) {
+        for (String key : new String[]{"namePrefix", "floodgateNamePrefix"}) {
             SourcesConfig config = loadPrefix(key, maximum);
             String value = switch (key) {
                 case "namePrefix" -> config.officialNamePrefix();
-                case "offlineNamePrefix" -> config.offlineNamePrefix();
                 default -> config.floodgateNamePrefix();
             };
             assertEquals(maximum, value);
             assertThrows(IllegalArgumentException.class, () -> loadPrefix(key, maximum + "a"));
         }
+        assertThrows(IllegalArgumentException.class, () -> loadPrefix("offlineNamePrefix", maximum));
+    }
+
+    @Test void offlinePrefixUsesActualNameRulesWithoutActivatingExternalAuthentication() throws Exception {
+        SourcesConfig config = loadPrefix("offlineNamePrefix", " [OFF] ");
+        assertEquals(" [OFF] ", config.offlineNamePrefix());
+        assertTrue(config.usesLegacyAuthentication());
+        assertFalse(config.hasCustomSources());
+        assertEquals("__easyauth_offline", config.reservedNameSource("[OFF]Alice"));
+        assertEquals("__easyauth_offline", config.reservedNameSource("[off]Alice"));
+        assertTrue(config.isReservedOfflineName("[OFF]Alice"));
+        assertTrue(config.isReservedOfflineName("[off]Alice"));
+        assertFalse(config.isReservedCustomName("[OFF]Alice"), "Offline allocation must not demand external authentication");
+        assertNull(config.reservedNameSource("Alice"));
+        assertNull(config.reservedNameSource("Other[OFF]Alice"));
+        assertFalse(config.isReservedOfflineName("Alice"));
+        assertFalse(config.isReservedOfflineName(null));
+        assertEquals("A".repeat(15), loadPrefix("offlineNamePrefix", "A".repeat(15)).offlineNamePrefix());
+        assertNull(loadPrefix("offlineNamePrefix", "   ").reservedNameSource("Alice"));
+    }
+
+    @Test void offlinePrefixRejectsDisplayOnlyLabelsAndOversizedNamespaces() {
+        for (String value : new String[]{"[离线] ", "[🎮]", "[O FF]", "A".repeat(16), "[A]\nB", "[A]\u007f"}) {
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                    () -> loadPrefix("offlineNamePrefix", value), value);
+            assertTrue(error.getMessage().contains("offlineNamePrefix"), error.getMessage());
+        }
+    }
+
+    @Test void offlineNamespacesCannotOverlapEnabledOrDisabledExternalSources() {
+        for (SourceType type : new SourceType[]{SourceType.UNION, SourceType.SKIN_SITE}) {
+            for (boolean enabled : new boolean[]{true, false}) {
+                for (String customPrefix : new String[]{"[OFF]", "[off]", "[OFF]X", "[O"}) {
+                    JsonObject source = new JsonObject();
+                    source.addProperty("id", "campus");
+                    source.addProperty("type", type.name());
+                    source.addProperty("enabled", enabled);
+                    source.addProperty("apiRoot", "https://campus.test/yggdrasil");
+                    source.addProperty("namePrefix", customPrefix);
+                    if (type == SourceType.UNION) source.addProperty("mappedUrl", "https://campus.test/mapped/{uuid}");
+                    assertThrows(IllegalArgumentException.class,
+                            () -> loadPrefixes("\"offlineNamePrefix\":\" [OFF] \",", "[" + source + "]"),
+                            type + " enabled=" + enabled + " prefix=" + customPrefix);
+                }
+            }
+        }
+    }
+
+    @Test void offlineReservationIsSeparateFromExternalAndOfficialDisplayPrefixes() throws Exception {
+        SourcesConfig config = loadPrefixes("\"offlineNamePrefix\":\"[OFF]\",",
+                "[{\"id\":\"official\",\"type\":\"OFFICIAL\",\"priority\":0,\"timeoutMillis\":2000,\"namePrefix\":\"[OFF] \"},"
+                        + "{\"id\":\"campus\",\"type\":\"UNION\",\"priority\":1,\"enabled\":false,\"apiRoot\":\"https://campus.test\","
+                        + "\"mappedUrl\":\"https://campus.test/mapped/{uuid}\",\"namePrefix\":\"[MUA]\"}]");
+        assertEquals("__easyauth_offline", config.reservedNameSource("[OFF]Bob"));
+        assertFalse(config.isReservedCustomName("[OFF]Bob"));
+        assertEquals("campus", config.reservedNameSource("[MUA]Bob"));
+        assertTrue(config.isReservedCustomName("[MUA]Bob"));
+        assertFalse(config.isReservedOfflineName("[MUA]Bob"));
+        assertTrue(config.usesLegacyAuthentication());
     }
 
     @Test void namePrefixesRejectControlsAndUnpairedSurrogates() {

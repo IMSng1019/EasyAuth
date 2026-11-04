@@ -4,6 +4,7 @@ import org.jetbrains.annotations.NotNull;
 import org.spongepowered.configurate.objectmapping.ConfigSerializable;
 import org.spongepowered.configurate.objectmapping.meta.Comment;
 import xyz.nikitacartes.easyauth.EasyAuth;
+import xyz.nikitacartes.easyauth.sources.MultiAuth;
 import xyz.nikitacartes.easyauth.storage.database.*;
 
 @ConfigSerializable
@@ -171,6 +172,6 @@ public class StorageConfigV1 extends ConfigTemplate {
         } else {
             db = new SQLite(EasyAuth.storageConfig);
         }
-        return db;
+        return new OfflineAccountDatabase(db, MultiAuth::accountName);
     }
 }

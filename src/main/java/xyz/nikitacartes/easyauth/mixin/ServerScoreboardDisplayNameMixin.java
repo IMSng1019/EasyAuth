@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-/** Keep the decorated TAB name current without changing any scoreboard team or membership. */
+/** Keep TAB and nameplate projections current without changing authoritative team membership. */
 @Mixin(ServerScoreboard.class)
 public abstract class ServerScoreboardDisplayNameMixin {
     @Shadow @Final private MinecraftServer server;
