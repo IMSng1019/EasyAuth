@@ -176,15 +176,6 @@ public final class MultiAuth {
         }
     }
 
-    /** The bare-name parser accepts allocated names only; quoting remains vanilla-compatible. */
-    public static boolean allocatedCommandName(String name) {
-        try {
-            return protectedName(name) || (identities != null && identities.findOfflineByLocalName(name) != null);
-        } catch (Exception e) {
-            throw new IllegalStateException("Cannot check allocated command name", e);
-        }
-    }
-
     public static boolean preventAutomaticMigration() {
         try {
             return enabled() || (identities != null && (identities.hasCustomIdentities() || identities.hasOfflineAliases()));

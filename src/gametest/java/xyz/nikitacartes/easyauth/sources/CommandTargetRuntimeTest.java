@@ -10,18 +10,16 @@ import net.minecraft.gametest.framework.GameTestHelper;
 
 //? if >= 1.20.3 && < 1.20.5 {
 /*import com.mojang.authlib.GameProfile;
-import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.arguments.StringArgumentType;
-import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.tree.ArgumentCommandNode;
+import com.mojang.brigadier.tree.CommandNode;
 import net.minecraft.commands.CommandBuildContext;
-import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
-import net.minecraft.commands.arguments.coordinates.Vec3Argument;
 import net.minecraft.commands.synchronization.SuggestionProviders;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.network.Connection;
@@ -31,17 +29,14 @@ import net.minecraft.network.PacketSendListener;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.network.protocol.game.ClientboundCommandsPacket;
-import net.minecraft.network.protocol.game.ClientboundCommandSuggestionsPacket;
-import net.minecraft.network.protocol.game.ServerboundCommandSuggestionPacket;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
-import xyz.nikitacartes.easyauth.event.AuthEventHandler;
-import xyz.nikitacartes.easyauth.interfaces.PlayerAuth;
-import xyz.nikitacartes.easyauth.storage.PlayerEntryV1;
-import xyz.nikitacartes.easyauth.utils.PlayersCache;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 *///?}
@@ -53,73 +48,42 @@ public class CommandTargetRuntimeTest {
 /*public class CommandTargetRuntimeTest implements FabricGameTest {
     @GameTest(template = EMPTY_STRUCTURE)
 *///?}
-    public void allocatedExternalNamesAreTeleportTargets(GameTestHelper context) throws Exception {
+    public void prefixedAccountsUseVanillaQuotedTeleportTargets(GameTestHelper context) throws Exception {
         //? if >= 1.20.3 && < 1.20.5 {
-        /*var server = context.getLevel().getServer();
-        var ledgerField = MultiAuth.class.getDeclaredField("identities");
-        ledgerField.setAccessible(true);
-        Object previousLedger = ledgerField.get(null);
-        var ledgerFile = Files.createTempFile("easyauth-command-targets-", ".sqlite");
-        ServerPlayer official = null;
-        ServerPlayer union = null;
-        ServerPlayer offline = null;
-        try (IdentityStore ledger = new IdentityStore(ledgerFile)) {
-            ledgerField.set(null, ledger);
-            String rawName = "Cmd" + UUID.randomUUID().toString().substring(0, 8);
-            var local = ledger.resolve(new AuthenticatedIdentity("command-test", SourceType.UNION,
-                    rawName, UUID.randomUUID(), rawName, List.of()), "[MUA]", (identity, profile, existing) -> {});
-            official = player(context, new GameProfile(UUID.randomUUID(), rawName));
-            union = player(context, new GameProfile(local.uuid(), local.name()));
-            String offlineRawName = "Off" + UUID.randomUUID().toString().substring(0, 7);
-            var offlineLocal = ledger.resolveOffline(offlineRawName, UUIDUtil.createOfflinePlayerUUID(offlineRawName),
-                    "[OFF]", profile -> {}).profile();
-            offline = player(context, new GameProfile(offlineLocal.uuid(), offlineLocal.name()));
-            server.getPlayerList().getPlayers().add(official);
-            server.getPlayerList().getPlayers().add(union);
-            server.getPlayerList().getPlayers().add(offline);
-            var source = server.createCommandSourceStack();
-
-            // Quoted names and vanilla targets already work and must retain their behavior.
-            check(EntityArgument.player().parse(new StringReader("\"" + local.name() + "\""))
-                    .findSinglePlayer(source) == union, "Quoted external name did not resolve");
-            check(EntityArgument.player().parse(new StringReader(rawName)).findSinglePlayer(source) == official,
-                    "Ordinary official name did not resolve");
-            check(EntityArgument.players().parse(new StringReader("@a[name=\"" + local.name() + "\"]"))
-                    .findPlayers(source).equals(List.of(union)), "Quoted selector name did not resolve");
-            check(EntityArgument.player().parse(new StringReader("@s"))
-                    .findSinglePlayer(source.withEntity(official)) == official, "Vanilla self selector changed");
-            expectInvalid("[Unallocated]X");
-            expectInvalid(local.name() + ",junk");
-            expectInvalid(local.name() + "]");
-
-            StringReader unquoted = new StringReader(local.name() + " trailing");
-            try {
-                check(EntityArgument.player().parse(unquoted).findSinglePlayer(source) == union,
-                        "Unquoted allocated name selected the wrong player");
-            } catch (CommandSyntaxException exception) {
-                throw new AssertionError("Allocated [MUA] name must be usable as an unquoted command target", exception);
+        /*try (Fixture fixture = new Fixture(context)) {
+            var source = fixture.server.createCommandSourceStack();
+            var dispatcher = fixture.server.getCommands().getDispatcher();
+            for (ServerPlayer target : List.of(fixture.union, fixture.offline)) {
+                String name = target.getGameProfile().getName();
+                UUID uuid = target.getUUID();
+                String quoted = StringArgumentType.escapeIfRequired(name);
+                check(EntityArgument.player().parse(new StringReader(quoted)).findSinglePlayer(source) == target,
+                        "Vanilla quoted name selected the wrong prefixed player");
+                check(EntityArgument.players().parse(new StringReader("@a[name=" + quoted + "]"))
+                                .findPlayers(source).equals(List.of(target)),
+                        "Quoted selector name no longer resolves the prefixed player");
+                expectInvalid(name);
+                fixture.official.setPos(10, 70, 10);
+                target.setPos(25, 70, 40);
+                check(dispatcher.execute("tp " + fixture.official.getGameProfile().getName() + " " + quoted, source) == 1
+                                && fixture.official.position().equals(target.position()),
+                        "Vanilla quoted teleport did not reach the prefixed player");
+                check(target.getUUID().equals(uuid) && target.getGameProfile().getName().equals(name),
+                        "Command handling changed the allocated identity");
             }
-            check(unquoted.getCursor() == local.name().length(), "Name parser consumed the next argument");
-            check(EntityArgument.player().parse(new StringReader(local.name().toLowerCase(java.util.Locale.ROOT)))
-                    .findSinglePlayer(source) == union, "Allocated name lost vanilla case-insensitive matching");
-
-            official.setPos(10, 70, 10);
-            union.setPos(25, 70, 40);
-            int result = server.getCommands().getDispatcher().execute("tp " + rawName + " " + local.name(), source);
-            check(result == 1 && official.position().equals(union.position()),
-                    "Actual unquoted teleport did not move the official player to the external player");
-            official.setPos(10, 70, 10);
-            result = server.getCommands().getDispatcher().execute("tp " + rawName + " \"" + local.name() + "\"", source);
-            check(result == 1 && official.position().equals(union.position()), "Quoted teleport regressed");
-            check(union.getUUID().equals(local.uuid()) && union.getGameProfile().getName().equals(local.name()),
-                    "Command compatibility changed persistent identity");
-            verifySuggestions(context, official, local.name(), offlineLocal.name(), rawName, ledgerField, ledger);
-        } finally {
-            if (official != null) server.getPlayerList().getPlayers().remove(official);
-            if (union != null) server.getPlayerList().getPlayers().remove(union);
-            if (offline != null) server.getPlayerList().getPlayers().remove(offline);
-            ledgerField.set(null, previousLedger);
-            Files.deleteIfExists(ledgerFile);
+            String union = StringArgumentType.escapeIfRequired(fixture.union.getGameProfile().getName());
+            String offline = StringArgumentType.escapeIfRequired(fixture.offline.getGameProfile().getName());
+            fixture.union.setPos(3, 70, 3);
+            fixture.offline.setPos(30, 70, 30);
+            check(dispatcher.execute("tp " + union + " " + offline, source) == 1
+                            && fixture.union.position().equals(fixture.offline.position()),
+                    "Vanilla teleport with both prefixed arguments failed");
+            check(EntityArgument.player().parse(new StringReader(fixture.official.getGameProfile().getName()))
+                            .findSinglePlayer(source) == fixture.official,
+                    "Ordinary player names no longer resolve");
+            check(EntityArgument.player().parse(new StringReader("@s"))
+                            .findSinglePlayer(source.withEntity(fixture.official)) == fixture.official,
+                    "Vanilla self selector changed");
         }
         *///?}
         context.succeed();
@@ -130,284 +94,140 @@ public class CommandTargetRuntimeTest {
     //?} else {
     /*@GameTest(template = EMPTY_STRUCTURE)
     *///?}
-    public void offlineNamesKeepPrefixesAndUsableCommandSuggestions(GameTestHelper context) throws Exception {
+    public void commandTreeAndLocalSuggestionsRemainVanilla(GameTestHelper context) throws Exception {
         //? if >= 1.20.3 && < 1.20.5 {
-        /*var server = context.getLevel().getServer();
-        var snapshotField = MultiAuth.class.getDeclaredField("current");
-        snapshotField.setAccessible(true);
-        Object previousSnapshot = snapshotField.get(null);
-        var configFile = Files.createTempFile("easyauth-offline-command-names-", ".json");
-        var players = new java.util.ArrayList<ServerPlayer>();
-        String prefix = "[OFF] ";
-        try {
-            Files.writeString(configFile, "{\"configVersion\":1,\"offlineNamePrefix\":\"[OFF] \",\"sources\":[]}");
-            SourcesConfig prefixed = SourcesConfig.load(configFile);
-            snapshotField.set(null, prefixed);
-            String suffix = UUID.randomUUID().toString().substring(0, 8);
-            ServerPlayer operator = player(context, new GameProfile(UUID.randomUUID(), "Op" + suffix));
-            players.add(operator);
-            ((PlayerAuth) operator).easyAuth$setAuthenticated(true);
-            server.getPlayerList().getPlayers().add(operator);
+        /*try (Fixture fixture = new Fixture(context)) {
+            var dispatcher = fixture.server.getCommands().getDispatcher();
+            var teleport = dispatcher.getRoot().getChild("teleport");
+            CommandNode<?> originalDestination = teleport.getChild("destination");
+            CommandNode<?> originalTargets = teleport.getChild("targets");
+            String customName = "suggestions" + UUID.randomUUID().toString().substring(0, 8);
+            dispatcher.register(Commands.literal(customName)
+                    .then(Commands.argument("custom", EntityArgument.entity()).suggests(SuggestionProviders.SUMMONABLE_ENTITIES))
+                    .then(Commands.argument("word", StringArgumentType.word())));
+            fixture.server.getCommands().sendCommands(fixture.official);
+            check(fixture.official.transport.commandTree != null, "No command tree packet was sent");
+            FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            ClientboundCommandsPacket decoded;
+            try {
+                fixture.official.transport.commandTree.write(buffer);
+                decoded = new ClientboundCommandsPacket(buffer);
+                check(!buffer.isReadable(), "Command tree packet left unread bytes");
+            } finally {
+                buffer.release();
+            }
+            var clientRoot = decoded.getRoot(CommandBuildContext.simple(fixture.server.registryAccess(),
+                    fixture.server.getWorldData().enabledFeatures()));
+            assertVanillaTeleportTree(clientRoot.getChild("teleport"));
+            assertVanillaTeleportTree(teleport);
+            check(teleport.getChild("destination") == originalDestination && teleport.getChild("targets") == originalTargets,
+                    "Sending the command tree replaced server argument nodes");
+            check(clientRoot.getChild("tp").getRedirect() == clientRoot.getChild("teleport"), "Vanilla /tp redirect changed");
+            var custom = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild(customName).getChild("custom");
+            check(custom.getCustomSuggestions() == SuggestionProviders.getProvider(
+                            new net.minecraft.resources.ResourceLocation("minecraft:summonable_entities")),
+                    "A third-party suggestion provider was replaced");
+            check(((ArgumentCommandNode<?, ?>) clientRoot.getChild(customName).getChild("word")).getCustomSuggestions() == null,
+                    "A plain argument gained a server suggestion provider");
 
-            // These are admitted offline profiles, including names allowed by a custom
-            // username regex. None has an external identity ledger entry.
-            for (String name : List.of("Local" + suffix, "玩家" + suffix, "[Off]" + suffix)) {
-                UUID offlineUuid = UUIDUtil.createOfflinePlayerUUID(name);
-                ServerPlayer target = player(context, new GameProfile(offlineUuid, name));
-                players.add(target);
-                PlayerEntryV1 entry = PlayersCache.getOrCreate(name);
-                entry.uuid = offlineUuid;
-                entry.onlineAccount = PlayerEntryV1.OnlineAccount.FALSE;
-                AuthEventHandler.loadPlayerData(target, ((CommandTestPlayer) target).transport);
-                PlayerAuth auth = (PlayerAuth) target;
-                check(auth.easyAuth$getAuthenticationChannel() == AuthenticationChannel.OFFLINE,
-                        "Loading the offline account selected the wrong display channel");
-                server.getPlayerList().getPlayers().add(target);
-                check(!MultiAuth.protectedName(name), "Offline fixture unexpectedly has an external ledger identity");
-                check(target.getDisplayName().getString().equals(prefix + name), "Offline chat prefix is missing or duplicated");
-                check(target.getTabListDisplayName() != null
-                                && target.getTabListDisplayName().getString().equals(prefix + name),
-                        "Offline TAB prefix is missing or duplicated");
-
-                String partial = name.substring(0, 3);
-                for (String input : List.of("tp ", "tp " + partial, "tp \"" + partial, "tp '" + partial,
-                        "tp [OFF]", "tp \"[OFF]")) {
-                    verifyOfflineSuggestion(context, operator, target, input, prefix);
+            var source = fixture.official.createCommandSourceStack();
+            String selectedEntity = UUID.randomUUID().toString();
+            SharedSuggestionProvider client = (SharedSuggestionProvider) java.lang.reflect.Proxy.newProxyInstance(
+                    SharedSuggestionProvider.class.getClassLoader(), new Class<?>[]{SharedSuggestionProvider.class},
+                    (proxy, method, arguments) -> switch (method.getName()) {
+                        case "customSuggestion" -> throw new AssertionError("Vanilla player completion sent an ASK_SERVER request");
+                        case "getOnlinePlayerNames" -> fixture.names();
+                        case "getSelectedEntities" -> List.of(selectedEntity);
+                        default -> method.invoke(source, arguments);
+                    });
+            var clientDispatcher = new CommandDispatcher<SharedSuggestionProvider>(clientRoot);
+            String ordinary = fixture.official.getGameProfile().getName();
+            for (String input : List.of("tp ", "/teleport ", "/tp [M", "tp [OFF]", "tp " + ordinary.substring(0, 3), "tp @a ")) {
+                StringReader reader = new StringReader(input);
+                if (input.startsWith("/")) reader.skip();
+                var pending = clientDispatcher.getCompletionSuggestions(clientDispatcher.parse(reader, client));
+                check(pending.isDone() && !pending.isCompletedExceptionally(), "Local vanilla completion did not finish: " + input);
+                var suggestions = pending.join().getList();
+                for (String name : fixture.names()) {
+                    if (!input.endsWith(" ") && !input.endsWith(name.substring(0, 3))
+                            && !(name.startsWith("[MUA]") && input.endsWith("[M"))
+                            && !(name.startsWith("[OFF]") && input.endsWith("[OFF]"))) continue;
+                    check(suggestions.stream().anyMatch(suggestion -> suggestion.getText().equals(name)),
+                            "Local vanilla suggestions omitted " + name + " for: " + input);
+                    if (!StringArgumentType.escapeIfRequired(name).equals(name)) {
+                        check(suggestions.stream().noneMatch(suggestion -> suggestion.getText().equals(StringArgumentType.escapeIfRequired(name))),
+                                "Automatic quote completion is still installed");
+                    }
                 }
-                check(target.getUUID().equals(offlineUuid) && target.getGameProfile().getName().equals(name),
-                        "Display or command completion changed the offline account identity");
-            }
-
-            // Reloading a cosmetic prefix does not alter target names, including when it is cleared.
-            snapshotField.set(null, SourcesConfig.defaults());
-            for (ServerPlayer target : players.subList(1, players.size())) {
-                check(target.getDisplayName().getString().equals(target.getGameProfile().getName())
-                                && target.getTabListDisplayName() == null,
-                        "Clearing the offline prefix did not restore vanilla display");
-                verifyOfflineSuggestion(context, operator, target, "tp ", "");
-                verifyOfflineSuggestion(context, operator, target,
-                        "tp \"" + target.getGameProfile().getName().substring(0, 3), "");
-            }
-            snapshotField.set(null, prefixed);
-
-            var dispatcher = server.getCommands().getDispatcher();
-            var source = operator.createCommandSourceStack();
-            for (ServerPlayer target : players.subList(1, players.size())) {
-                server.getPlayerList().getPlayers().remove(target);
-            }
-            for (String input : List.of("tp ", "tp [OFF]")) {
-                var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse(input, source)).join();
-                for (ServerPlayer target : players.subList(1, players.size())) {
-                    String quoted = StringArgumentType.escapeIfRequired(target.getGameProfile().getName());
-                    check(suggestions.getList().stream().noneMatch(suggestion -> suggestion.getText().equals(quoted)),
-                            "Disconnected offline account leaked into online player suggestions");
+                if (input.endsWith(" ")) {
+                    check(suggestions.stream().anyMatch(suggestion -> suggestion.getText().equals(selectedEntity)),
+                            "Vanilla crosshair entity UUID suggestion was not restored");
                 }
             }
-        } finally {
-            server.getPlayerList().getPlayers().removeAll(players);
-            snapshotField.set(null, previousSnapshot);
-            Files.deleteIfExists(configFile);
+            String union = StringArgumentType.escapeIfRequired(fixture.union.getGameProfile().getName());
+            String offline = StringArgumentType.escapeIfRequired(fixture.offline.getGameProfile().getName());
+            for (String input : List.of("tp " + union, "tp " + union + " " + offline, "teleport " + ordinary + " " + offline,
+                    "tp @a ~ ~ ~", "tp @s ~ ~ ~ ~ ~", "tp @s ~ ~ ~ facing entity @e[limit=1] eyes",
+                    "tp @s ~ ~ ~ facing ~ ~ ~", "tp " + selectedEntity)) {
+                var parsed = clientDispatcher.parse(input, client);
+                check(!parsed.getReader().canRead() && parsed.getContext().getLastChild().getCommand() != null,
+                        "Valid vanilla command became incomplete: " + input);
+            }
         }
         *///?}
         context.succeed();
     }
 
     //? if >= 1.20.3 && < 1.20.5 {
-    /*private static void verifyOfflineSuggestion(GameTestHelper context, ServerPlayer operator,
-                                                ServerPlayer target, String input, String prefix) throws Exception {
-        var dispatcher = context.getLevel().getServer().getCommands().getDispatcher();
-        var source = operator.createCommandSourceStack();
-        String name = target.getGameProfile().getName();
-        String quoted = StringArgumentType.escapeIfRequired(name);
-        CaptureConnection transport = ((CommandTestPlayer) operator).transport;
-        transport.suggestions = null;
-        operator.connection.handleCustomCommandSuggestions(new ServerboundCommandSuggestionPacket(41, input));
-        check(transport.suggestions != null && transport.suggestions.getId() == 41,
-                "Server did not send the offline-name suggestion packet");
-        FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        com.mojang.brigadier.suggestion.Suggestions suggestions;
-        try {
-            transport.suggestions.write(buffer);
-            suggestions = new ClientboundCommandSuggestionsPacket(buffer).getSuggestions();
-            check(!buffer.isReadable(), "Offline-name suggestion packet left unread bytes");
-        } finally {
-            buffer.release();
+    /*private static void assertVanillaTeleportTree(CommandNode<?> teleport) {
+        check(teleport.getChildren().size() == 3 && teleport.getChild("location") != null,
+                "Vanilla teleport argument branches were changed");
+        check(teleport.getChild("destination") != null && teleport.getChild("destination").getCommand() != null,
+                "Vanilla single-destination branch is missing");
+        check(teleport.getChild("targets") != null && teleport.getChild("targets").getCommand() == null,
+                "Vanilla multi-target branch gained single-target execution");
+        for (CommandNode<?> node : List.of(teleport.getChild("destination"), teleport.getChild("targets"),
+                teleport.getChild("targets").getChild("destination"))) {
+            check(node instanceof ArgumentCommandNode<?, ?> argument && argument.getCustomSuggestions() == null,
+                    "Entity arguments still force server-side completion");
         }
-        var selected = suggestions.getList().stream().filter(suggestion -> suggestion.getText().equals(quoted))
-                .findFirst().orElseThrow(() -> new AssertionError("Offline name missing from completion for: " + input));
-        check(prefix.isEmpty() ? selected.getTooltip() == null
-                        : selected.getTooltip() != null && selected.getTooltip().getString().equals(prefix + name),
-                "Command suggestion does not show the offline display prefix for: " + input);
-        if (!quoted.equals(name)) {
-            check(suggestions.getList().stream().noneMatch(suggestion -> suggestion.getText().equals(name)),
-                    "Offline special name was suggested without required quotes");
-        }
-        String completed = selected.apply(input);
-        check(completed.equals("tp " + quoted), "Completion inserted a display name instead of the real account name");
-        check(!dispatcher.parse(completed, source).getReader().canRead(), "Completed offline name is not valid command syntax");
-        operator.setPos(10, 70, 10);
-        target.setPos(25, 70, 40);
-        check(dispatcher.execute(completed, source) == 1 && operator.position().equals(target.position()),
-                "Selecting the offline suggestion did not teleport to the intended player");
     }
 
-    private static void verifySuggestions(GameTestHelper context, ServerPlayer official, String localName,
-                                          String offlineName, String rawName, java.lang.reflect.Field ledgerField, IdentityStore ledger) throws Exception {
-        var server = context.getLevel().getServer();
-        var dispatcher = server.getCommands().getDispatcher();
-        CommandSourceStack source = official.createCommandSourceStack();
-        String quoted = StringArgumentType.escapeIfRequired(localName);
-        for (String input : List.of("tp ", "tp [M", "tp \"[M")) {
-            var suggestions = dispatcher.getCompletionSuggestions(dispatcher.parse(input, source)).join();
-            check(suggestions.getList().stream().anyMatch(suggestion -> suggestion.getText().equals(quoted)),
-                    "External-name completion must include quotes for input: " + input);
-            check(suggestions.getList().stream().noneMatch(suggestion -> suggestion.getText().equals(localName)),
-                    "Completion still inserts an invalid bare external name");
-        }
-        check(dispatcher.getCompletionSuggestions(dispatcher.parse("tp " + rawName.substring(0, 3), source)).join()
-                .getList().stream().anyMatch(suggestion -> suggestion.getText().equals(rawName)), "Official-name completion changed");
-        check(dispatcher.getCompletionSuggestions(dispatcher.parse("tp @", source)).join()
-                .getList().stream().anyMatch(suggestion -> suggestion.getText().equals("@s")), "Selector completion changed");
+    private static final class Fixture implements AutoCloseable {
+        final MinecraftServer server;
+        final Field ledgerField;
+        final Object previousLedger;
+        final Path ledgerFile;
+        final IdentityStore ledger;
+        final CommandTestPlayer official;
+        final CommandTestPlayer union;
+        final CommandTestPlayer offline;
 
-        String fixture = "suggestions" + UUID.randomUUID().toString().substring(0, 8);
-        dispatcher.register(Commands.literal(fixture)
-                .then(Commands.argument("custom", EntityArgument.entity()).suggests(SuggestionProviders.SUMMONABLE_ENTITIES))
-                .then(Commands.argument("word", StringArgumentType.word())));
-        String similarFixture = fixture + "shape";
-        dispatcher.register(Commands.literal(similarFixture)
-                .then(Commands.argument("location", Vec3Argument.vec3()).executes(command -> 1))
-                .then(Commands.argument("destination", EntityArgument.entity()).executes(command -> 1))
-                .then(Commands.argument("targets", EntityArgument.entities())
-                        .then(Commands.argument("location", Vec3Argument.vec3()).executes(command -> 1))
-                        .then(Commands.argument("destination", EntityArgument.entity()).executes(command -> 1))));
-        var serverDestination = (ArgumentCommandNode<CommandSourceStack, ?>) dispatcher.getRoot()
-                .getChild("teleport").getChild("destination");
-        check(serverDestination.getCustomSuggestions() == null, "Fixture expected vanilla server-side suggestions");
-        server.getCommands().sendCommands(official);
-        CaptureConnection transport = ((CommandTestPlayer) official).transport;
-        check(transport.commandTree != null, "sendCommands did not send a real command-tree packet");
-        FriendlyByteBuf commandBuffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        ClientboundCommandsPacket decoded;
-        try {
-            transport.commandTree.write(commandBuffer);
-            decoded = new ClientboundCommandsPacket(commandBuffer);
-            check(!commandBuffer.isReadable(), "Command packet left unread serialized bytes");
-        } finally {
-            commandBuffer.release();
-        }
-        var clientRoot = decoded.getRoot(CommandBuildContext.simple(server.registryAccess(), server.getWorldData().enabledFeatures()));
-        var targets = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild("teleport").getChild("targets");
-        // Registration returns a named Wrapper for the server, but the client registry stores
-        // and decodes its underlying provider. Compare the decoded registry value, not Wrapper.
-        check(targets.getCustomSuggestions() == SuggestionProviders.getProvider(
-                        new net.minecraft.resources.ResourceLocation("minecraft:ask_server")),
-                "Serialized EntityArgument must ask the server for escaped suggestions");
-        check(serverDestination.getCustomSuggestions() == null, "Sending command tree mutated the live server dispatcher");
-        check(dispatcher.getRoot().getChild("teleport").getChild("destination") == serverDestination
-                        && dispatcher.getRoot().getChild("teleport").getChild("targets").getCommand() == null,
-                "Client completion projection changed the executable server teleport tree");
-        check(clientRoot.getChild(similarFixture).getChild("destination") != null
-                        && clientRoot.getChild(similarFixture).getChild("targets").getCommand() == null,
-                "A third-party command with similar arguments was rewritten");
-        var custom = (ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild(fixture).getChild("custom");
-        check(custom.getCustomSuggestions() == SuggestionProviders.getProvider(
-                        new net.minecraft.resources.ResourceLocation("minecraft:summonable_entities")),
-                "Existing registered suggestion provider was overwritten");
-        check(((ArgumentCommandNode<SharedSuggestionProvider, ?>) clientRoot.getChild(fixture).getChild("word"))
-                .getCustomSuggestions() == null, "Non-entity argument gained server suggestions");
-
-        var clientDispatcher = new CommandDispatcher<SharedSuggestionProvider>(clientRoot);
-        java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
-        java.util.concurrent.atomic.AtomicInteger pendingId = new java.util.concurrent.atomic.AtomicInteger(-1);
-        var pending = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>>();
-        var queued = new java.util.ArrayList<ServerboundCommandSuggestionPacket>();
-        SharedSuggestionProvider client = (SharedSuggestionProvider) java.lang.reflect.Proxy.newProxyInstance(
-                SharedSuggestionProvider.class.getClassLoader(), new Class<?>[]{SharedSuggestionProvider.class}, (proxy, method, arguments) -> {
-                    if (!method.getName().equals("customSuggestion")) return method.invoke(source, arguments);
-                    String input = ((CommandContext<?>) arguments[0]).getInput();
-                    int requestId = requests.incrementAndGet();
-                    // Match vanilla ClientSuggestionProvider: a new request cancels the
-                    // previous pending future. Network replies arrive after all siblings
-                    // have asked for suggestions, not synchronously inside this call.
-                    if (pending.get() != null) pending.get().cancel(false);
-                    var future = new java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions>();
-                    pending.set(future);
-                    pendingId.set(requestId);
-                    queued.add(new ServerboundCommandSuggestionPacket(requestId, input));
-                    return future;
-                });
-        String completed = null;
-        for (String input : List.of("tp ", "tp [M", "/tp ", "/tp [OFF]", "/tp \"[OFF]",
-                "/teleport ", "/teleport [M", "tp " + rawName.substring(0, 3),
-                "tp " + rawName + " ", "tp " + rawName + " [M", "/tp " + rawName + " [OFF]",
-                "/tp " + rawName + " \"[OFF]", "tp " + quoted + " ", "tp " + quoted + " [OFF]", "tp @a ")) {
-            queued.clear();
-            StringReader inputReader = new StringReader(input);
-            if (input.startsWith("/")) inputReader.skip();
-            var completion = clientDispatcher.getCompletionSuggestions(clientDispatcher.parse(inputReader, client));
-            check(!queued.isEmpty(), "Decoded command tree did not invoke ASK_SERVER for: " + input);
-            for (var request : queued) {
-                transport.suggestions = null;
-                official.connection.handleCustomCommandSuggestions(request);
-                check(transport.suggestions != null && transport.suggestions.getId() == request.getId(),
-                        "Server did not answer the actual suggestion packet");
-                FriendlyByteBuf suggestionBuffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                try {
-                    transport.suggestions.write(suggestionBuffer);
-                    var response = new ClientboundCommandSuggestionsPacket(suggestionBuffer);
-                    if (response.getId() == pendingId.get()) {
-                        pending.get().complete(response.getSuggestions());
-                        pending.set(null);
-                        pendingId.set(-1);
-                    }
-                } finally {
-                    suggestionBuffer.release();
-                }
-            }
-            check(completion.isDone() && !completion.isCompletedExceptionally() && !completion.isCancelled(),
-                    "Delayed vanilla completion did not finish for: " + input + " (requests=" + queued.size() + ")");
-            check(queued.size() == 1, "Sibling entity branches issued competing server requests for: " + input);
-            var suggestions = completion.join().getList();
-            for (String name : List.of(localName, offlineName, rawName)) {
-                String expected = StringArgumentType.escapeIfRequired(name);
-                if (!input.endsWith(" ") && !input.endsWith(name.substring(0, 3))
-                        && !(name.equals(localName) && input.endsWith("[M"))
-                        && !(name.equals(offlineName) && input.endsWith("[OFF]"))) continue;
-                var selected = suggestions.stream().filter(suggestion -> suggestion.getText().equals(expected)).findFirst()
-                        .orElseThrow(() -> new AssertionError("Missing player " + name + " after delayed completion for: " + input));
-                check(expected.equals(name) || suggestions.stream().noneMatch(suggestion -> suggestion.getText().equals(name)),
-                        "Delayed completion inserted an unquoted prefixed name");
-                String applied = selected.apply(input);
-                StringReader completedReader = new StringReader(applied);
-                if (applied.startsWith("/")) completedReader.skip();
-                var parsed = clientDispatcher.parse(completedReader, client);
-                check(!parsed.getReader().canRead() && parsed.getContext().getLastChild().getCommand() != null,
-                        "Completed teleport command is invalid or lost its single-target executable form: " + applied);
-                if (input.equals("tp [M")) completed = applied;
-            }
-        }
-        check(completed != null, "No completed prefixed command was captured");
-        for (String input : List.of("tp @a ~ ~ ~", "tp @s ~ ~ ~ ~ ~",
-                "tp @s ~ ~ ~ facing entity @e[limit=1] eyes", "tp @s ~ ~ ~ facing ~ ~ ~")) {
-            var parsed = clientDispatcher.parse(input, client);
-            check(!parsed.getReader().canRead() && parsed.getContext().getLastChild().getCommand() != null,
-                    "Teleport projection lost selector, coordinates, rotation or facing syntax: " + input);
-        }
-        // Removing the ledger makes our server parser wrapper fall through to vanilla. This
-        // checks what an unmodified client's parser will see, not our bare-name extension.
-        ledgerField.set(null, null);
-        try {
-            check(!clientDispatcher.parse(completed, client).getReader().canRead(), "Completed target is not valid vanilla syntax");
-            check(clientDispatcher.parse("tp " + localName, client).getReader().canRead(),
-                    "Test must preserve the known vanilla limitation for manually typed bare bracket names");
-            check(!clientDispatcher.parse("tp " + UUID.randomUUID(), client).getReader().canRead(), "UUID argument syntax regressed");
-        } finally {
+        Fixture(GameTestHelper context) throws Exception {
+            server = context.getLevel().getServer();
+            ledgerField = MultiAuth.class.getDeclaredField("identities");
+            ledgerField.setAccessible(true);
+            previousLedger = ledgerField.get(null);
+            ledgerFile = Files.createTempFile("easyauth-vanilla-commands-", ".sqlite");
+            ledger = new IdentityStore(ledgerFile);
             ledgerField.set(null, ledger);
+            String raw = "Cmd" + UUID.randomUUID().toString().substring(0, 8);
+            var external = ledger.resolve(new AuthenticatedIdentity("vanilla-command-test", SourceType.UNION,
+                    raw, UUID.randomUUID(), raw, List.of()), "[MUA]", (identity, profile, existing) -> {});
+            String offlineRaw = "Off" + UUID.randomUUID().toString().substring(0, 7);
+            var local = ledger.resolveOffline(offlineRaw, UUIDUtil.createOfflinePlayerUUID(offlineRaw), "[OFF]", profile -> {}).profile();
+            official = new CommandTestPlayer(context, new GameProfile(UUID.randomUUID(), raw));
+            union = new CommandTestPlayer(context, new GameProfile(external.uuid(), external.name()));
+            offline = new CommandTestPlayer(context, new GameProfile(local.uuid(), local.name()));
+            server.getPlayerList().getPlayers().addAll(List.of(official, union, offline));
         }
-    }
-
-    private static ServerPlayer player(GameTestHelper context, GameProfile profile) {
-        return new CommandTestPlayer(context, profile);
+        List<String> names() { return List.of(official.getGameProfile().getName(), union.getGameProfile().getName(), offline.getGameProfile().getName()); }
+        @Override public void close() throws Exception {
+            server.getPlayerList().getPlayers().removeAll(List.of(official, union, offline));
+            ledgerField.set(null, previousLedger);
+            ledger.close();
+            Files.deleteIfExists(ledgerFile);
+        }
     }
 
     private static final class CommandTestPlayer extends ServerPlayer {
@@ -421,32 +241,20 @@ public class CommandTargetRuntimeTest {
 
     private static final class CaptureConnection extends Connection {
         ClientboundCommandsPacket commandTree;
-        ClientboundCommandSuggestionsPacket suggestions;
         CaptureConnection() { super(PacketFlow.SERVERBOUND); }
         @Override public void setListener(PacketListener listener) {}
         @Override public boolean isConnected() { return true; }
-        @Override public java.net.SocketAddress getRemoteAddress() {
-            return new java.net.InetSocketAddress("127.0.0.1", 25565);
-        }
-        @Override public void send(Packet<?> packet) {
-            if (packet instanceof ClientboundCommandsPacket tree) commandTree = tree;
-            if (packet instanceof ClientboundCommandSuggestionsPacket result) suggestions = result;
-        }
+        @Override public java.net.SocketAddress getRemoteAddress() { return new java.net.InetSocketAddress("127.0.0.1", 25565); }
+        @Override public void send(Packet<?> packet) { if (packet instanceof ClientboundCommandsPacket tree) commandTree = tree; }
         @Override public void send(Packet<?> packet, PacketSendListener listener) { send(packet); }
         @Override public void send(Packet<?> packet, PacketSendListener listener, boolean flush) { send(packet); }
     }
 
     private static void expectInvalid(String target) throws Exception {
-        try {
-            EntityArgument.player().parse(new StringReader(target));
-        } catch (CommandSyntaxException expected) {
-            return;
-        }
-        throw new AssertionError("Unallocated or malformed token was accepted: " + target);
+        try { EntityArgument.player().parse(new StringReader(target)); }
+        catch (CommandSyntaxException expected) { return; }
+        throw new AssertionError("Allocated bracket name was accepted without vanilla quotes: " + target);
     }
-
-    private static void check(boolean condition, String message) {
-        if (!condition) throw new AssertionError(message);
-    }
+    private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
     *///?}
 }

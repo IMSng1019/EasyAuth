@@ -1,3 +1,8 @@
+### 4.0.0-multisource.12 — Fabric 1.20.4
+
+- Restore vanilla command parsing and completion by removing four command compatibility mixins and their two suggestion helpers. Remove automatic quoting, cosmetic-prefix search/tooltips, forced server suggestions and teleport command-tree/context adjustments; bracketed player names now require manually entered quotes.
+- Keep real MUA/offline profile prefixes, account mappings, UUIDs, credentials and authentication restrictions. Existing names are not renamed by this change.
+
 ### 4.0.0-multisource.11 — Fabric 1.20.4
 
 - Fix missing first-player suggestions in `/tp` and `/teleport`: the client command tree now makes one server completion request instead of two competing requests that cancel each other.

@@ -1,3 +1,13 @@
+# Fabric 1.20.4 vanilla command behavior verification - 2026-11-04
+
+Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.12.jar`.
+
+A focused clean build (`:1.20.3-fabric:clean :1.20.3-fabric:build :1.20.3-fabric:collectJars`) passed with **134 unit tests and 19 required Fabric GameTests**. See `build/vanilla-commands-final.log`. Artifact inspection confirms the four command compatibility mixins, both suggestion helpers and `MultiAuth.allocatedCommandName` are absent, while the authentication command restriction and identity/skin/display integrations remain present. SHA-256: `9d63516d3786aeb63fce4130062f8f6c2664a285e183d0bfe71c2940a21d075e`.
+
+The revised command regressions first failed against the installed patches: the client teleport tree had been changed, and allocated bracket names were accepted without quotes (`build/vanilla-commands-red.log`). After removal they verify actual quoted MUA/offline teleports, quoted selector names, rejection of bare bracket names and unchanged profile names/UUIDs. Real command-tree packets are serialized and decoded; the client retains vanilla destination/targets branches, performs player-name suggestions locally without `ASK_SERVER`, emits raw names without automatic quotes, and again offers the crosshair entity UUID. Custom providers, command aliases, selector/coordinate/rotation/facing syntax and the server tree are also checked. The offline identity regression now uses the required vanilla quoted target.
+
+Bracketed names remain real account names and must be quoted manually, for example `/tp "[MUA]Alice" "[OFF]Bob"`. Automatic quote completion, display-prefix search/tooltips, server completion forcing and teleport context adjustments are intentionally removed. No graphical-client session was run; runtime evidence covers vanilla parser execution and packet-decoded client trees/local suggestion providers. No account, authentication or world-data migration is introduced by this removal. `git diff --check` passed.
+
 # Fabric 1.20.4 teleport completion verification - 2026-11-04
 
 Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.11.jar`.

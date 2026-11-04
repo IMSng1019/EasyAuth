@@ -109,8 +109,8 @@ public class OfflineProfileRuntimeTest {
             check(player.getDisplayName().getString().equals(localName) && player.getTabListDisplayName() == null,
                     "The real offline prefix was added twice in chat/TAB");
             server.getPlayerList().getPlayers().add(player);
-            check(EntityArgument.player().parse(new StringReader(localName)).findSinglePlayer(server.createCommandSourceStack()) == player,
-                    "Allocated offline name does not work as a MUA-style command target");
+            check(EntityArgument.player().parse(new StringReader("\"" + localName + "\"")).findSinglePlayer(server.createCommandSourceStack()) == player,
+                    "Allocated offline name does not work as a vanilla quoted command target");
             check(MultiAuth.rejectIdentityEdit(server.createCommandSourceStack(), rawName)
                             && MultiAuth.rejectIdentityEdit(server.createCommandSourceStack(), localName),
                     "An alias bypassed identity-edit protection");
