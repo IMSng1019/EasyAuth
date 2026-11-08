@@ -8,7 +8,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.UnaryOperator;
 
-/** Resolves allocated local names while preserving the password backend's original records. */
+/** Resolves offline/external local names while preserving the account backend's original records. */
 public final class OfflineAccountDatabase implements DbApi {
     private final DbApi delegate;
     private final UnaryOperator<String> accountNames;

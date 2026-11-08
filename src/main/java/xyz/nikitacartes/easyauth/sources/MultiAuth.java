@@ -130,22 +130,32 @@ public final class MultiAuth {
         return config != null && !config.usesLegacyAuthentication();
     }
 
-    /** Resolve only a persisted local alias, never a guessed prefix or an arbitrary raw name. */
+    /** Resolve only ledger-bound current/historical names; never infer aliases from prefix text. */
     public static String accountName(String localName) {
         try {
-            IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByLocalName(localName);
-            return mapping == null ? localName : mapping.accountName();
+            IdentityStore.LocalProfile mapping = identities == null ? null : identities.findNameOwner(localName);
+            return mapping == null ? localName : identities.accountName(mapping);
         } catch (Exception e) {
-            throw new IllegalStateException("Cannot resolve offline account identity", e);
+            throw new IllegalStateException("Cannot resolve account identity", e);
         }
     }
 
     public static String onlineName(String accountName) {
+        return onlineName(null, accountName);
+    }
+
+    /** A previous session may still use its old name while a reconnect refreshes the ledger. */
+    public static String onlineName(MinecraftServer server, String accountName) {
         try {
-            IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByAccountName(accountName);
-            return mapping == null ? accountName : mapping.profile().name();
+            IdentityStore.LocalProfile mapping = identities == null ? null : identities.findNameOwner(accountName);
+            if (mapping != null && server != null && server.getPlayerList() != null) {
+                for (var player : server.getPlayerList().getPlayers()) {
+                    if (player.getUUID().equals(mapping.uuid())) return StoneCutterUtils.getName(player.getGameProfile());
+                }
+            }
+            return mapping == null ? accountName : mapping.name();
         } catch (Exception e) {
-            throw new IllegalStateException("Cannot resolve offline player identity", e);
+            throw new IllegalStateException("Cannot resolve player identity", e);
         }
     }
 
@@ -161,7 +171,7 @@ public final class MultiAuth {
     public static boolean hasOfflineAccount(String rawName) {
         try {
             IdentityStore.OfflineProfile mapping = identities == null ? null : identities.findOfflineByAccountName(rawName);
-            return mapping != null && !mapping.profile().namePrefix().isEmpty();
+            return mapping != null && identities.findOfflineByLocalName(mapping.profile().name()) != null;
         } catch (Exception e) {
             throw new IllegalStateException("Cannot check offline account reservation", e);
         }
@@ -362,15 +372,15 @@ public final class MultiAuth {
                     server.getWorldPath(LevelResource.PLAYER_STATS_DIR),
                     server.getWorldPath(LevelResource.PLAYER_ADVANCEMENTS_DIR)));
             local = identities.resolve(identity, snapshot.namePrefix(identity.sourceId()), (candidateIdentity, candidate, existing) -> {
-                // Check the actual candidate inside the transaction, before either ledger row is
-                // committed. Existing mappings keep their original names even if config changes.
-                if (!existing && candidateIdentity.type() != SourceType.OFFICIAL) {
+                // Check newly allocated and renamed names against current configured namespaces.
+                IdentityStore.LocalProfile previous = existing ? identities.findByUuid(candidate.uuid()) : null;
+                if (candidateIdentity.type() != SourceType.OFFICIAL && (!existing || !candidate.equals(previous))) {
                     String owner = snapshot.reservedNameSource(candidate.name());
                     if (owner != null && !owner.equals(candidateIdentity.sourceId())) {
                         throw new IdentityConflictException("SOURCE_NAMESPACE_COLLISION", "This name namespace belongs to another authentication source");
                     }
                 }
-                legacyGuard.check(candidateIdentity, candidate, existing);
+                legacyGuard.check(candidateIdentity, candidate, existing, identities.accountName(candidate));
             });
         } catch (IdentityConflictException conflict) {
             LogWarn("[auth-source] identity rejected source=" + identity.sourceId() + " subject=" + identity.subjectId()
@@ -437,7 +447,7 @@ public final class MultiAuth {
         IdentityStore.OfflineProfile allocated = reservePassword(username, snapshot);
         IdentityStore.LocalProfile local = allocated.profile();
         GameProfile profile = new GameProfile(local.uuid(), local.name());
-        if (connection != null && !local.namePrefix().isEmpty()) {
+        if (connection != null && hasOfflineAccount(allocated.accountName())) {
             synchronized (OFFLINE_PROOFS) {
                 OFFLINE_PROOFS.put(connection, new OfflineProof(local.uuid(), local.name(), allocated.accountName(), local.namePrefix()));
             }
@@ -479,7 +489,7 @@ public final class MultiAuth {
         } else {
             UUID expectedUuid = uuid;
             allocated = identities.resolveOffline(accountName, uuid, configuredPrefix, candidate -> {
-                if (previous == null || previous.profile().namePrefix().isEmpty()) {
+                if (previous == null || !previous.profile().equals(candidate)) {
                     String owner = snapshot == null ? null : snapshot.reservedNameSource(candidate.name());
                     if (owner != null && !owner.equals(IdentityStore.OFFLINE_SOURCE_ID)) {
                         throw new IdentityConflictException("SOURCE_NAMESPACE_COLLISION", "Offline name overlaps another authentication source");
@@ -557,8 +567,7 @@ public final class MultiAuth {
 
     public static boolean rejectIdentityEdit(CommandSourceStack source, String name) {
         try {
-            if (identities == null || (identities.findByName(name) == null
-                    && identities.findOfflineByAccountName(name) == null)) return false;
+            if (identities == null || identities.findNameOwner(name) == null) return false;
             source.sendFailure(Component.literal("[EasyAuth] This account is reserved by the identity ledger. Legacy rename, UUID, premium and removal commands cannot change its identity."));
         } catch (Exception e) {
             source.sendFailure(Component.literal("[EasyAuth] Identity ledger unavailable; change refused."));

@@ -418,6 +418,46 @@ public class MultiAuthRuntimeTest {
             EasyAuth.DB.registerUser(local);
             check(MultiAuth.shouldUsePasswordPath(sources, offlineName, local.uuid), "Existing genuine offline client lost password routing");
             check(!MultiAuth.shouldUsePasswordPath(sources, offlineName, UUID.randomUUID()), "A distinct custom UUID was forced into the old password account");
+
+            PlayerEntryV1 originalAccount = EasyAuth.DB.getUserData(localName);
+            originalAccount.otpSecret = "preserved-external-otp";
+            originalAccount.otpEnabled = true;
+            originalAccount.passkeys.add("preserved-external-passkey");
+            originalAccount.sessionTimeout = 123;
+            check(EasyAuth.DB.updateUserData(originalAccount), "Could not save external account fixture");
+            String originalAccountJson = EasyAuth.DB.getUserData(localName).toJson();
+            String updatedName = "NEW_" + rawName;
+            Files.writeString(configFile, "{\"configVersion\":1,\"newPlayerAuth\":\"EXTERNAL\",\"sources\":["
+                    + sourceJson.replace("[MUA] ", "NEW_") + "]}");
+            MultiAuth.install(SourcesConfig.load(configFile));
+            TestConnection returning = new TestConnection();
+            ServerLoginPacketListenerImpl returningListener = new ServerLoginPacketListenerImpl(server, returning);
+            returningListener.handleHello(new ServerboundHelloPacket(rawName, providerUuid));
+            SecretKey returningSecret = Crypt.generateSecretKey();
+            expectedDigest.set(new BigInteger(Crypt.digestData(returning.challenge.getServerId(),
+                    returning.challenge.getPublicKey(), returningSecret)).toString(16));
+            returningListener.handleKey(new ServerboundKeyPacket(returningSecret, returning.challenge.getPublicKey(), returning.challenge.getChallenge()));
+            GameProfile updated = awaitProfile(returningListener, returning);
+            check(StoneCutterUtils.getName(updated).equals(updatedName) && StoneCutterUtils.getId(updated).equals(StoneCutterUtils.getId(profile)),
+                    "Returning Union login did not update its prefix with the same local UUID");
+            MultiAuth.beforeVerification(returning, updated);
+            expectRejected(() -> MultiAuth.beforeVerification(new TestConnection(), updated), "Renamed account bypassed connection proof");
+            check(EasyAuth.DB.getUserData(updatedName).username.equals(localName)
+                            && EasyAuth.DB.getUserData(updatedName).toJson().equals(originalAccountJson),
+                    "Renaming external profile created an empty account or lost account data");
+            check(!EasyAuth.DB.getAllDataStrict().containsKey(updatedName.toLowerCase(java.util.Locale.ROOT)),
+                    "Renaming external profile created a duplicate backend record");
+            check(PlayersCache.getOrLoadOrRegister(updatedName) == PlayersCache.getOrLoadOrRegister(localName),
+                    "External names did not share the original cache");
+            check(MultiAuth.onlineName(localName).equals(updatedName)
+                            && MultiAuth.rejectIdentityEdit(server.createCommandSourceStack(), localName),
+                    "Original backend name lost lookup or identity-edit protection");
+            expectRejected(() -> MultiAuth.preparePassword(server, localName), "Old external account became a password account");
+            ServerPlayer renamed = new ServerPlayer(server, context.getLevel(), updated, ClientInformation.createDefault());
+            renamed.connection = new ServerGamePacketListenerImpl(server, returning, renamed, CommonListenerCookie.createInitial(updated));
+            AuthEventHandler.loadPlayerData(renamed, returning);
+            check(((PlayerAuth) renamed).easyAuth$isAuthenticated() && renamed.getDisplayName().getString().equals(updatedName),
+                    "Renamed external player lost authentication or received a duplicate prefix");
         } finally {
             if (union != null) server.getPlayerList().getPlayers().remove(union);
             if (official != null) server.getPlayerList().getPlayers().remove(official);

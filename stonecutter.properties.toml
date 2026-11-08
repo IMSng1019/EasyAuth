@@ -5,7 +5,7 @@
 # Mod
 mod_name = "EasyAuth"
 mod_id = "easyauth"
-mod_version = "4.0.0-multisource.12-tab-diagnostic"
+mod_version = "4.0.0-multisource.13-prefix-refresh"
 
 # Shared dependencies
 luckperms_version = "5.4"

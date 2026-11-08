@@ -32,7 +32,7 @@ public final class IdentityStore implements AutoCloseable {
     @FunctionalInterface
     public interface LegacyGuard {
         /** Runs inside the ledger transaction, including on an existing identity's return visit. */
-        void check(AuthenticatedIdentity identity, LocalProfile profile, boolean existingIdentity);
+        void check(AuthenticatedIdentity identity, LocalProfile profile, boolean existingIdentity) throws SQLException;
     }
 
     private final Connection connection;
@@ -57,7 +57,7 @@ public final class IdentityStore implements AutoCloseable {
             statement.execute("BEGIN IMMEDIATE");
             schemaTransaction = true;
             try (ResultSet version = statement.executeQuery("PRAGMA user_version")) {
-                if (version.next() && version.getInt(1) > 3) {
+                if (version.next() && version.getInt(1) > 4) {
                     throw new SQLException("Identity ledger was created by a newer EasyAuth version");
                 }
             }
@@ -95,9 +95,30 @@ public final class IdentityStore implements AutoCloseable {
             statement.execute("CREATE INDEX IF NOT EXISTS identity_profile ON source_identity(profile_id)");
             statement.execute("CREATE INDEX IF NOT EXISTS identity_provider_uuid ON source_identity(provider_uuid)");
             statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS offline_account_name ON source_identity(lower(provider_name)) WHERE source_type = 'OFFLINE'");
-            // Older versions assume an OFFLINE profile's local name is its password key.
-            // They must refuse this ledger after local names can be independently allocated.
-            statement.execute("PRAGMA user_version = 3");
+            boolean hasAccountName = false;
+            try (ResultSet columns = statement.executeQuery("PRAGMA table_info(profile)")) {
+                while (columns.next()) {
+                    if ("account_name".equals(columns.getString("name"))) hasAccountName = true;
+                }
+            }
+            if (!hasAccountName) {
+                statement.execute("ALTER TABLE profile ADD COLUMN account_name TEXT NOT NULL DEFAULT ''");
+                statement.execute("""
+                        UPDATE profile SET account_name = COALESCE(
+                            (SELECT provider_name FROM source_identity WHERE profile_id = profile.id AND source_type = 'OFFLINE'), name)
+                        """);
+            }
+            statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS profile_account_name ON profile(lower(account_name))");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS profile_name_history (
+                        name_key TEXT PRIMARY KEY NOT NULL,
+                        profile_id TEXT NOT NULL REFERENCES profile(id),
+                        name_prefix TEXT NOT NULL
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS history_profile ON profile_name_history(profile_id)");
+            // Older jars cannot resolve renamed external accounts to their retained backend keys.
+            statement.execute("PRAGMA user_version = 4");
             statement.execute("COMMIT");
             schemaTransaction = false;
         } catch (SQLException | RuntimeException e) {
@@ -117,7 +138,7 @@ public final class IdentityStore implements AutoCloseable {
         return resolve(identity, "", guard);
     }
 
-    /** Allocate an external namespace once; a configuration change never renames a stored profile. */
+    /** Refresh an allocated prefix on return visits without changing the identity or backend key. */
     public synchronized LocalProfile resolve(AuthenticatedIdentity identity, String configuredPrefix, LegacyGuard guard) throws SQLException {
         Objects.requireNonNull(identity, "identity");
         Objects.requireNonNull(guard, "guard");
@@ -141,10 +162,23 @@ public final class IdentityStore implements AutoCloseable {
                         && !existing.uuid().equals(identity.providerUuid())) {
                     throw conflict("NATIVE_UUID_CHANGED", "Skin-site native UUID changed for an existing identity; refusing to move or reuse player data");
                 }
-                // In particular, a Union remap or upstream rename must not move local world data.
-                guard.check(identity, existing, true);
+                LocalProfile candidate = existing;
+                if (identity.type() != SourceType.OFFICIAL
+                        && (!existing.namePrefix().isEmpty() || hasNameHistory(existing.id()))) {
+                    String prefix = ExternalProfileNames.normalizePrefix(configuredPrefix);
+                    if (!prefix.equals(existing.namePrefix())) {
+                        String baseName = existing.name().substring(existing.namePrefix().length());
+                        String name = ExternalProfileNames.localName(prefix, baseName);
+                        assertNamespaceAvailable(identity.sourceId(), prefix, name);
+                        assertNameAvailable(name, existing.id());
+                        candidate = new LocalProfile(existing.id(), name, existing.uuid(), prefix);
+                    }
+                }
+                // Upstream renames/remaps never alter the stable local base name or UUID.
+                guard.check(identity, candidate, true);
+                if (!candidate.equals(existing)) renameProfile(existing, candidate);
                 updateProvider(identity);
-                return existing;
+                return candidate;
             }
 
             UUID localUuid = switch (identity.type()) {
@@ -205,12 +239,12 @@ public final class IdentityStore implements AutoCloseable {
                 throw conflict("LEGACY_IDENTITY_CHANGED", "The offline account name, case or UUID differs from its reserved identity");
             }
             assertOfflineAllowed(accountName, uuid);
-            if (existing != null && !existing.profile().namePrefix().isEmpty()) {
+            String prefix = ExternalProfileNames.normalizePrefix(configuredPrefix);
+            if (existing != null && existing.profile().namePrefix().equals(prefix)) {
                 guard.accept(existing.profile());
                 return existing;
             }
 
-            String prefix = ExternalProfileNames.normalizePrefix(configuredPrefix);
             String localName = ExternalProfileNames.localName(prefix, accountName);
             assertNamespaceAvailable(OFFLINE_SOURCE_ID, prefix, localName);
             LocalProfile candidate = new LocalProfile(existing == null ? UUID.randomUUID().toString() : existing.profile().id(),
@@ -221,25 +255,26 @@ public final class IdentityStore implements AutoCloseable {
             }
             guard.accept(candidate);
             if (existing == null) {
-                insertProfile(candidate);
+                insertProfile(candidate, accountName);
                 insertIdentity(OFFLINE_SOURCE_ID, uuid.toString(), "OFFLINE", uuid, accountName, candidate.id());
             } else if (!candidate.equals(existing.profile())) {
-                try (PreparedStatement statement = connection.prepareStatement(
-                        "UPDATE profile SET name = ?, name_key = ?, name_prefix = ? WHERE id = ?")) {
-                    statement.setString(1, candidate.name());
-                    statement.setString(2, candidate.name().toLowerCase(Locale.ROOT));
-                    statement.setString(3, candidate.namePrefix());
-                    statement.setString(4, candidate.id());
-                    if (statement.executeUpdate() != 1) throw new SQLException("Offline profile disappeared during allocation");
-                }
+                renameProfile(existing.profile(), candidate);
             }
             return new OfflineProfile(candidate, accountName);
         });
     }
 
-    /** Only true aliases are valid backend lookups by local name; plain records are not aliases. */
+    /** Allocated identities remain managed after clearing their prefix; plain records are not aliases. */
     public synchronized OfflineProfile findOfflineByLocalName(String localName) throws SQLException {
-        return findOffline("p.name_key = ? AND p.name_prefix <> ''", localName.toLowerCase(Locale.ROOT));
+        String key = localName.toLowerCase(Locale.ROOT);
+        OfflineProfile current = findOffline("""
+                p.name_key = ? AND (p.name_prefix <> '' OR EXISTS
+                    (SELECT 1 FROM profile_name_history h WHERE h.profile_id = p.id))
+                """, key);
+        return current != null ? current : findOffline("""
+                EXISTS (SELECT 1 FROM profile_name_history h WHERE h.profile_id = p.id
+                    AND h.name_key = ? AND h.name_prefix <> '')
+                """, key);
     }
 
     public synchronized OfflineProfile findOfflineByAccountName(String accountName) throws SQLException {
@@ -264,7 +299,8 @@ public final class IdentityStore implements AutoCloseable {
     public synchronized boolean hasOfflineAliases() throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT 1 FROM profile p JOIN source_identity i ON i.profile_id = p.id
-                WHERE i.source_id = ? AND i.source_type = 'OFFLINE' AND p.name_prefix <> '' LIMIT 1
+                WHERE i.source_id = ? AND i.source_type = 'OFFLINE' AND (p.name_prefix <> '' OR EXISTS
+                    (SELECT 1 FROM profile_name_history h WHERE h.profile_id = p.id)) LIMIT 1
                 """)) {
             statement.setString(1, OFFLINE_SOURCE_ID);
             try (ResultSet rows = statement.executeQuery()) {
@@ -310,7 +346,7 @@ public final class IdentityStore implements AutoCloseable {
             return;
         }
         assertOutsideAllocatedNamespace(name);
-        LocalProfile byName = findByName(name);
+        LocalProfile byName = findNameOwner(name);
         LocalProfile byUuid = findByUuid(uuid);
         if (byName != null && (!byName.uuid().equals(uuid) || !isRawOfflineProfile(byName.id()))) {
             throw conflict("SOURCE_AUTHENTICATION_REQUIRED", "This player name belongs to another identity; log in with its original authentication source");
@@ -329,8 +365,33 @@ public final class IdentityStore implements AutoCloseable {
         }
     }
 
+    /** Includes retained backend keys and old local names, which must never be reassigned. */
+    public synchronized LocalProfile findNameOwner(String name) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT p.id, p.name, p.uuid, p.name_prefix FROM profile p
+                WHERE p.name_key = ? OR lower(p.account_name) = ? OR EXISTS
+                    (SELECT 1 FROM profile_name_history h WHERE h.profile_id = p.id AND h.name_key = ?)
+                """)) {
+            String key = name.toLowerCase(Locale.ROOT);
+            for (int i = 1; i <= 3; i++) statement.setString(i, key);
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? profile(rows) : null;
+            }
+        }
+    }
+
+    public synchronized String accountName(LocalProfile profile) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT account_name FROM profile WHERE id = ?")) {
+            statement.setString(1, profile.id());
+            try (ResultSet rows = statement.executeQuery()) {
+                return rows.next() ? rows.getString(1) : profile.name();
+            }
+        }
+    }
+
     public synchronized boolean isProtectedName(String name) throws SQLException {
-        return customExists("p.name_key = ?", name.toLowerCase(Locale.ROOT));
+        LocalProfile owner = findNameOwner(name);
+        return owner != null && customExists("p.id = ?", owner.id());
     }
 
     public synchronized boolean isProtectedUuid(UUID uuid) throws SQLException {
@@ -359,6 +420,9 @@ public final class IdentityStore implements AutoCloseable {
         return connection.prepareStatement("""
                 SELECT DISTINCT i.source_id, p.name_prefix FROM source_identity i JOIN profile p ON p.id = i.profile_id
                 WHERE i.source_type IN ('UNION', 'SKIN_SITE', 'OFFLINE') AND p.name_prefix <> ''
+                UNION
+                SELECT DISTINCT i.source_id, h.name_prefix FROM source_identity i JOIN profile_name_history h ON h.profile_id = i.profile_id
+                WHERE i.source_type IN ('UNION', 'SKIN_SITE', 'OFFLINE') AND h.name_prefix <> ''
                 """);
     }
 
@@ -452,7 +516,7 @@ public final class IdentityStore implements AutoCloseable {
     }
 
     private void assertNameAvailable(String name, String permittedProfileId) throws SQLException {
-        LocalProfile local = findByName(name);
+        LocalProfile local = findNameOwner(name);
         OfflineProfile account = findOfflineByAccountName(name);
         if ((local != null && !local.id().equals(permittedProfileId))
                 || (account != null && !account.profile().id().equals(permittedProfileId))) {
@@ -461,13 +525,45 @@ public final class IdentityStore implements AutoCloseable {
     }
 
     private void insertProfile(LocalProfile profile) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO profile(id,name,name_key,uuid,name_prefix) VALUES (?,?,?,?,?)")) {
+        insertProfile(profile, profile.name());
+    }
+
+    private void insertProfile(LocalProfile profile, String accountName) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO profile(id,name,name_key,uuid,name_prefix,account_name) VALUES (?,?,?,?,?,?)")) {
             statement.setString(1, profile.id());
             statement.setString(2, profile.name());
             statement.setString(3, profile.name().toLowerCase(Locale.ROOT));
             statement.setString(4, profile.uuid().toString());
             statement.setString(5, profile.namePrefix());
+            statement.setString(6, accountName);
             statement.executeUpdate();
+        }
+    }
+
+    private boolean hasNameHistory(String profileId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM profile_name_history WHERE profile_id = ? LIMIT 1")) {
+            statement.setString(1, profileId);
+            try (ResultSet rows = statement.executeQuery()) { return rows.next(); }
+        }
+    }
+
+    private void renameProfile(LocalProfile previous, LocalProfile candidate) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO profile_name_history(name_key, profile_id, name_prefix) VALUES (?,?,?)
+                ON CONFLICT(name_key) DO NOTHING
+                """)) {
+            statement.setString(1, previous.name().toLowerCase(Locale.ROOT));
+            statement.setString(2, previous.id());
+            statement.setString(3, previous.namePrefix());
+            statement.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE profile SET name = ?, name_key = ?, name_prefix = ? WHERE id = ?")) {
+            statement.setString(1, candidate.name());
+            statement.setString(2, candidate.name().toLowerCase(Locale.ROOT));
+            statement.setString(3, candidate.namePrefix());
+            statement.setString(4, candidate.id());
+            if (statement.executeUpdate() != 1) throw new SQLException("Profile disappeared during prefix refresh");
         }
     }
 

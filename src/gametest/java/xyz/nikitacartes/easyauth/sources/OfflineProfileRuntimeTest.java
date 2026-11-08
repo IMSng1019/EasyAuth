@@ -120,10 +120,46 @@ public class OfflineProfileRuntimeTest {
             Files.writeString(configFile, "{\"configVersion\":1,\"offlineNamePrefix\":\"[NEW]\",\"sources\":[]}");
             snapshotField.set(null, SourcesConfig.load(configFile));
             GameProfile reloaded = MultiAuth.preparePassword(server, rawName);
-            check(reloaded.equals(bound), "A config reload renamed or reassigned the existing offline identity");
+            String newName = "[NEW]" + rawName;
+            check(reloaded.getName().equals(newName) && reloaded.getId().equals(forcedUuid),
+                    "Reconnect did not replace the old offline prefix while preserving UUID");
+            check(EasyAuth.DB.getUserData(newName).toJson().equals(EasyAuth.DB.getUserData(localName).toJson())
+                            && AuthHelper.checkPassword(newName, "old-password".toCharArray()) == AuthHelper.PasswordOptions.CORRECT,
+                    "Prefix refresh lost the original credential data");
+            check(PlayersCache.getOrLoadOrRegister(newName) == PlayersCache.getOrLoadOrRegister(localName),
+                    "Old and new names no longer share the original account cache");
+            check(xyz.nikitacartes.easyauth.commands.AuthCommand.forceLogin(server.createCommandSourceStack(), newName) == 1,
+                    "Admin command could not locate the still-online old-name session after prefix refresh");
+            expectRejected(() -> MultiAuth.preparePassword(server, localName), "Old offline name became claimable");
+            expectRejected(() -> MultiAuth.preparePassword(server, newName), "New offline name became claimable");
             snapshotField.set(null, SourcesConfig.defaults());
-            check(MultiAuth.preparePassword(server, rawName).equals(bound), "Clearing the configured prefix discarded a persisted identity");
-            check(MultiAuth.preventAutomaticMigration(), "Mapped offline UUID could enter implicit UUID migration");
+            GameProfile cleared = MultiAuth.preparePassword(server, rawName);
+            check(cleared.getName().equals(rawName) && cleared.getId().equals(forcedUuid),
+                    "Clearing the configured prefix failed to restore the raw name with its effective UUID");
+            check(EasyAuth.DB.getUserData(newName).otpEnabled && EasyAuth.DB.getUserData(newName).passkeys.equals(old.passkeys),
+                    "Cleared prefix lost old-session credential aliases");
+            check(MultiAuth.preventAutomaticMigration() && MultiAuth.offlineNamesEnabled() && MultiAuth.hasOfflineAccount(rawName),
+                    "Clearing the last offline prefix disabled ownership or UUID migration protection");
+            expectRejected(() -> MultiAuth.beforeVerification(new TestConnection(), cleared),
+                    "Cleared offline identity no longer requires connection-bound ownership");
+            TestConnection clearedConnection = new TestConnection();
+            GameProfile clearedBound = MultiAuth.preparePassword(server, clearedConnection, SourcesConfig.defaults(), rawName);
+            MultiAuth.beforeVerification(clearedConnection, clearedBound);
+            check(MultiAuth.consumeOfflineProof(clearedConnection, clearedBound) != null,
+                    "Cleared offline prefix did not issue its ownership proof");
+            PlayerEntryV1 oldSessionEntry = auth.easyAuth$getPlayerEntryV1();
+            String previousHash = oldSessionEntry.password;
+            oldSessionEntry.passkeys.add("key-to-revoke");
+            oldSessionEntry.issueSessionToken(3600);
+            xyz.nikitacartes.easyauth.commands.AuthCommand.updatePassword(server.createCommandSourceStack(), newName, "reset-password");
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (System.nanoTime() < deadline && (oldSessionEntry.password.equals(previousHash)
+                    || oldSessionEntry.sessionTokenHash != null || !oldSessionEntry.passkeys.isEmpty())) {
+                Thread.sleep(10);
+            }
+            check(!oldSessionEntry.password.equals(previousHash) && oldSessionEntry.sessionTokenHash == null
+                            && oldSessionEntry.passkeys.isEmpty(),
+                    "Password reset missed the old-name session, allowing logout to restore old credentials");
         } finally {
             if (player != null) server.getPlayerList().getPlayers().remove(player);
             server.setUsesAuthentication(onlineMode);

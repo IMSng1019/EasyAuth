@@ -29,6 +29,10 @@ public final class LegacyIdentityGuard implements IdentityStore.LegacyGuard {
         policy.check(identity, profile, existingIdentity);
     }
 
+    public void check(AuthenticatedIdentity identity, IdentityStore.LocalProfile profile, boolean existingIdentity, String accountName) {
+        policy.check(identity, profile, existingIdentity, accountName);
+    }
+
     private static UUID forcedUuid(PlayerEntryV1 entry) {
         if (entry.forcedUuid == null || entry.forcedUuid.isBlank()) return null;
         try {

@@ -1,3 +1,13 @@
+# Fabric 1.20.4 prefix refresh verification - 2026-11-09
+
+Artifact: `build/libs/easyauth-fabric-mc1.20.4-4.0.0-multisource.13-prefix-refresh.jar`. The focused Fabric build and `collectJars` passed with **142 unit tests and 22 required GameTests**, zero failures/skips. See `build/prefix-refresh-final.log`. Jar metadata confirms the new version, Fabric and Java 17 compatibility, and the packaged ledger/database integration classes. `git diff --check` passed.
+
+Ledger regressions cover UNION and native-v7 skin profiles replacing only their saved prefix, unchanged profile IDs/UUIDs, upstream-name independence, clearing/reapplying prefixes, restarts, true schema-3 upgrade fixtures, original backend keys, reserved historical names/namespaces, legacy/current-name collisions, length limits, failed guards and rollback/retry. Original behavior failed six cases in `build/prefix-refresh-red.log`. Additional failures reproduced loss of managed offline status after clearing the last prefix (`build/prefix-refresh-clear-red.log`), inability to manage a still-online old-name session (`build/prefix-refresh-session-red.log`), and raw historical-name reuse (`build/prefix-refresh-history-red.log`).
+
+The real Union RSA/HTTP login fixture reconnects after changing the source prefix and verifies the new GameProfile name, original local UUID, retained account fields, one backend record, shared cache and connection-bound proof. The offline fixture verifies the original password, forced UUID, OTP and passkeys across prefix changes/clearing, continued ownership proof and migration protection, old/new launcher-name rejection, management of the still-online old-name player, and password-reset revocation of that session's cached credentials. Existing routing, command, combat, TAB/nameplate and skin regressions remain passing.
+
+Only allocated real prefixes are refreshed; unprefixed legacy external identities retain display-only behavior. Schema 4 preserves backend account keys and reserves historical names; older jars require the pre-upgrade ledger backup. UUID-based player data is not moved. Scoreboards, teams and third-party data keyed by name need separate adjustment. Tests use local fixture databases/HTTP services, not a production world, live remote database or graphical client.
+
 # Fabric 1.20.4 vanilla command behavior verification - 2026-11-04
 
 Artifact: `easyauth-fabric-mc1.20.4-4.0.0-multisource.12.jar`.

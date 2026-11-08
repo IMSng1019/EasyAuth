@@ -1,3 +1,10 @@
+### 4.0.0-multisource.13-prefix-refresh
+
+- Refresh allocated UNION, skin-site and offline name prefixes on the next connection, including clearing and reapplying prefixes. Keep the local UUID, base name and original account data.
+- Retain historical names as reserved aliases and reject conflicting or overlong replacements without changing the previous mapping.
+- Upgrade the identity ledger to schema 4 with stable backend account keys. Back up the ledger before upgrading; older jars cannot read this schema.
+- Keep offline identity protection after clearing a prefix and locate existing online sessions by UUID for account administration.
+
 ### Release notes:
 #### Add
 - IP limit controls [#200](https://github.com/NikitaCartes/EasyAuth/issues/200), thanks to @virgil698 [#252](https://github.com/NikitaCartes/EasyAuth/pull/252)

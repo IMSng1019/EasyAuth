@@ -19,6 +19,11 @@ public final class LegacyIdentityPolicy implements IdentityStore.LegacyGuard {
     }
 
     @Override public void check(AuthenticatedIdentity identity, IdentityStore.LocalProfile profile, boolean existingIdentity) {
+        check(identity, profile, existingIdentity, profile.name());
+    }
+
+    /** accountName must come from this profile's persisted ledger binding, never client input. */
+    public void check(AuthenticatedIdentity identity, IdentityStore.LocalProfile profile, boolean existingIdentity, String accountName) {
         for (Account account : accounts.get()) {
             UUID effective = account.forcedUuid() != null ? account.forcedUuid() : account.uuid();
             if (identity.type() != SourceType.OFFICIAL && account.official()
@@ -27,11 +32,12 @@ public final class LegacyIdentityPolicy implements IdentityStore.LegacyGuard {
             }
 
             boolean sameName = account.name().equalsIgnoreCase(profile.name());
+            boolean sameAccount = account.name().equalsIgnoreCase(accountName);
             boolean sameUuid = profile.uuid().equals(account.uuid()) || profile.uuid().equals(account.forcedUuid());
-            if (!sameName && !sameUuid) continue;
+            if (!sameName && !sameAccount && !sameUuid) continue;
 
             // Reuse is authorized by the persisted source identity, never just name/UUID equality.
-            if (existingIdentity && account.name().equals(profile.name()) && profile.uuid().equals(effective)) continue;
+            if (existingIdentity && account.name().equals(accountName) && profile.uuid().equals(effective)) continue;
 
             boolean pristinePremiumPlaceholder = account.uuid() == null && account.forcedUuid() == null && !account.hasPassword();
             if (identity.type() == SourceType.OFFICIAL && sameName && account.name().equals(profile.name())

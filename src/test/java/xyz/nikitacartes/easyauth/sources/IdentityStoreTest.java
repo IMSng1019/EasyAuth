@@ -70,14 +70,15 @@ class IdentityStoreTest {
             assertEquals(local, store.findByName("[MUA]LXW1019"));
         }
         try (IdentityStore store = new IdentityStore(file)) {
-            assertEquals(local, store.resolve(identity("union", SourceType.UNION, "42", UUID.randomUUID(), "Renamed"), "[NEW]", AVAILABLE));
+            var updated = store.resolve(identity("union", SourceType.UNION, "42", UUID.randomUUID(), "Renamed"), "[NEW]", AVAILABLE);
+            assertEquals(new IdentityStore.LocalProfile(local.id(), "[NEW]LXW1019", local.uuid(), "[NEW]"), updated);
         }
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file);
              var statement = connection.createStatement();
              var rows = statement.executeQuery("SELECT provider_name, name_prefix FROM source_identity JOIN profile ON profile.id = profile_id WHERE source_id = 'union'")) {
             assertTrue(rows.next());
             assertEquals("Renamed", rows.getString("provider_name"), "Provider metadata must retain the raw upstream name");
-            assertEquals("[MUA]", rows.getString("name_prefix"));
+            assertEquals("[NEW]", rows.getString("name_prefix"));
         }
     }
 
@@ -170,7 +171,7 @@ class IdentityStoreTest {
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file);
              var statement = connection.createStatement(); var rows = statement.executeQuery("PRAGMA user_version")) {
             assertTrue(rows.next());
-            assertEquals(3, rows.getInt(1));
+            assertEquals(4, rows.getInt(1));
         }
     }
 
@@ -337,7 +338,7 @@ class IdentityStoreTest {
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + file); var statement = connection.createStatement()) {
             try (var rows = statement.executeQuery("PRAGMA user_version")) {
                 assertTrue(rows.next());
-                assertEquals(3, rows.getInt(1));
+                assertEquals(4, rows.getInt(1));
             }
             try (var rows = statement.executeQuery("SELECT provider_name, provider_uuid FROM source_identity WHERE source_type = 'OFFLINE'")) {
                 assertTrue(rows.next());
@@ -348,7 +349,7 @@ class IdentityStoreTest {
         }
     }
 
-    @Test void offlinePrefixIsPersistedAcrossReopenAndConfigurationChanges() throws Exception {
+    @Test void offlinePrefixIsUpdatedAcrossReopenAndConfigurationChanges() throws Exception {
         Path file = directory.resolve("offline-stable.db");
         UUID uuid = UUID.randomUUID();
         IdentityStore.OfflineProfile original;
@@ -357,14 +358,16 @@ class IdentityStoreTest {
         }
         try (IdentityStore store = new IdentityStore(file)) {
             var visits = new ArrayList<IdentityStore.LocalProfile>();
-            assertEquals(original, store.resolveOffline("Alice", uuid, "[NEW]", visits::add));
-            assertEquals(original, store.resolveOffline("Alice", uuid, "", visits::add));
-            assertEquals(List.of(original.profile(), original.profile()), visits);
+            var updated = store.resolveOffline("Alice", uuid, "[NEW]", visits::add);
+            assertEquals(new IdentityStore.LocalProfile(original.profile().id(), "[NEW]Alice", uuid, "[NEW]"), updated.profile());
+            var cleared = store.resolveOffline("Alice", uuid, "", visits::add);
+            assertEquals(new IdentityStore.LocalProfile(original.profile().id(), "Alice", uuid, ""), cleared.profile());
+            assertEquals(List.of(updated.profile(), cleared.profile()), visits);
             assertEquals(IdentityStore.OFFLINE_SOURCE_ID, store.reservedNameSource("[off]Unallocated"));
             assertTrue(store.isReservedOfflineName("[OFF]Unallocated"));
             assertFalse(store.isReservedCustomName("[OFF]Unallocated"));
             assertFalse(store.isReservedOfflineName("Other[OFF]Alice"));
-            assertNull(store.findOfflineByLocalName("[NEW]Alice"));
+            assertEquals(cleared, store.findOfflineByLocalName("[NEW]Alice"));
         }
     }
 
