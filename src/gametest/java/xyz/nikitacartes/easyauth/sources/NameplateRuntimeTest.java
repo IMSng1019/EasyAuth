@@ -336,6 +336,60 @@ public class NameplateRuntimeTest {
         context.succeed();
     }
 
+    //? if >= 1.21.5 {
+    @GameTest
+    //?} else {
+    /*@GameTest(template = EMPTY_STRUCTURE)
+    *///?}
+    public void playerListsReachEveryAuthenticationChannel(GameTestHelper context) throws Exception {
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*var server = context.getLevel().getServer();
+        List<TestPlayer> players = new ArrayList<>();
+        String suffix = UUID.randomUUID().toString().substring(0, 6);
+        try {
+            TestPlayer official = player(context, "Tab" + suffix, players);
+            TestPlayer union = player(context, "[MUA]" + suffix, players);
+            TestPlayer offline = player(context, "[OFF]" + suffix, players);
+            ((PlayerAuth) official).easyAuth$setAuthenticationSource(AuthenticationChannel.OFFICIAL, "official");
+            ((PlayerAuth) union).easyAuth$setAuthenticationSource(AuthenticationChannel.UNION, "mua");
+            ((PlayerAuth) union).easyAuth$setLocalNamePrefix("[MUA]");
+            ((PlayerAuth) offline).easyAuth$setLocalNamePrefix("[OFF]");
+            // Password authentication must not suppress player-info initialization.
+            ((PlayerAuth) offline).easyAuth$setAuthenticated(false);
+            var expected = new HashSet<UUID>();
+            for (TestPlayer player : players) {
+                expected.add(player.getUUID());
+                player.getGameProfile().getProperties().put("textures",
+                        new com.mojang.authlib.properties.Property("textures", "fixture-texture", "fixture-signature"));
+            }
+            for (TestPlayer viewer : players) {
+                initializeViewer(viewer, new ArrayList<ServerPlayer>(players), server.getScoreboard(), false);
+                check(viewer.transport.listed.equals(expected), "Initial TAB roster is incomplete for "
+                        + ((PlayerAuth) viewer).easyAuth$getAuthenticationChannel());
+                for (TestPlayer target : players) {
+                    GameProfile received = viewer.transport.profiles.get(target.getUUID());
+                    check(received != null && received.getName().equals(target.getGameProfile().getName()),
+                            "Player-info initialization lost a prefixed profile");
+                    check(received.getProperties().get("textures").equals(target.getGameProfile().getProperties().get("textures")),
+                            "Player-info initialization lost texture properties");
+                }
+            }
+            SourceNameDisplay.refresh(server);
+            for (TestPlayer viewer : players) {
+                check(viewer.transport.listed.equals(expected), "Display refresh changed TAB membership");
+                viewer.connection.send(new ClientboundPlayerInfoRemovePacket(List.of(union.getUUID())));
+                check(!viewer.transport.listed.contains(union.getUUID()), "Removed player remains in TAB");
+                viewer.connection.send(ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(List.of(union)));
+                check(viewer.transport.listed.equals(expected), "Rejoining MUA player is missing from TAB");
+            }
+        } finally {
+            for (TestPlayer player : players) xyz.nikitacartes.easyauth.integrations.NameplateDisplay.forget(player.connection);
+            server.getPlayerList().getPlayers().removeAll(players);
+        }
+        *///?}
+        context.succeed();
+    }
+
     //? if >= 1.20.3 && < 1.20.5 {
     /*private static void installPrefix(java.lang.reflect.Field snapshotField, Path configFile, String prefix) throws Exception {
         var json = new com.google.gson.JsonObject();
@@ -421,6 +475,7 @@ public class NameplateRuntimeTest {
     private static final class CaptureConnection extends Connection {
         final Scoreboard board = new Scoreboard();
         final Map<UUID, GameProfile> profiles = new HashMap<>();
+        final java.util.Set<UUID> listed = new HashSet<>();
         final Map<UUID, Component> tabNames = new HashMap<>();
         boolean active;
         int teamPackets;
@@ -447,6 +502,11 @@ public class NameplateRuntimeTest {
                             profiles.put(entry.profileId(), entry.profile());
                         }
                         if (profiles.containsKey(entry.profileId())
+                                && decoded.actions().contains(ClientboundPlayerInfoUpdatePacket.Action.UPDATE_LISTED)) {
+                            if (entry.listed()) listed.add(entry.profileId());
+                            else listed.remove(entry.profileId());
+                        }
+                        if (profiles.containsKey(entry.profileId())
                                 && decoded.actions().contains(ClientboundPlayerInfoUpdatePacket.Action.UPDATE_DISPLAY_NAME)) {
                             if (entry.displayName() == null) tabNames.remove(entry.profileId());
                             else tabNames.put(entry.profileId(), entry.displayName());
@@ -455,6 +515,7 @@ public class NameplateRuntimeTest {
                 } else {
                     for (UUID uuid : new ClientboundPlayerInfoRemovePacket(bytes).profileIds()) {
                         profiles.remove(uuid);
+                        listed.remove(uuid);
                         tabNames.remove(uuid);
                     }
                 }

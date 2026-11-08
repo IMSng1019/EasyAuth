@@ -78,6 +78,16 @@ public class AuthCommand {
                         .requires(EasyAuthPermissions.require("easyauth.commands.auth.reload", 3))
                         .then(literal("reload").executes(ctx -> MultiAuth.reloadSkins(ctx.getSource())))
                 )
+                //? if >= 1.20.3 && < 1.20.5 {
+                /*.then(literal("tab")
+                        .requires(EasyAuthPermissions.require("easyauth.commands.auth.getPlayerInfo", 3))
+                        .then(literal("trace").then(argument("seconds", integer(1, 300))
+                                .executes(ctx -> xyz.nikitacartes.easyauth.diagnostics.TabListDiagnostics.start(
+                                        ctx.getSource(), getInteger(ctx, "seconds")))))
+                        .then(literal("status").executes(ctx -> xyz.nikitacartes.easyauth.diagnostics.TabListDiagnostics.status(ctx.getSource())))
+                        .then(literal("stop").executes(ctx -> xyz.nikitacartes.easyauth.diagnostics.TabListDiagnostics.stop(ctx.getSource())))
+                )
+                *///?}
                 .then(literal("setGlobalPassword")
                         .requires(EasyAuthPermissions.require("easyauth.commands.auth.setGlobalPassword", 4))
                         .then(argument("password", string())

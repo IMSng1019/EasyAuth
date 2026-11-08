@@ -31,6 +31,9 @@ public class EasyAuthClientFabric implements ClientModInitializer {
     public void onInitializeClient() {
         RuleEngine.init(FabricLoader.getInstance().getConfigDir());
         EasyAuthPackets.init();
+        //? if >= 1.20.3 && < 1.20.5 {
+        /*TabListClientDiagnostics.register();
+        *///?}
 
         ClientPlayConnectionEvents.JOIN.register((listener, sender, client) -> RuleEngine.onJoin());
         ClientPlayConnectionEvents.DISCONNECT.register((listener, client) -> RuleEngine.onDisconnect());

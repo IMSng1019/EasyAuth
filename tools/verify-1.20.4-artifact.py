@@ -12,6 +12,9 @@ with zipfile.ZipFile(jar) as archive:
     assert not duplicates, f"Duplicate entries: {duplicates}"
     metadata = json.loads(archive.read("fabric.mod.json"))
     assert metadata["id"] == "easyauth"
+    has_tab_diagnostics = metadata["version"].endswith("-tab-diagnostic")
+    if has_tab_diagnostics:
+        metadata["version"] = metadata["version"].removesuffix("-tab-diagnostic")
     assert metadata["version"] in {"4.0.0-multisource.4", "4.0.0-multisource.5-diagnostic", "4.0.0-multisource.6", "4.0.0-multisource.7", "4.0.0-multisource.8", "4.0.0-multisource.9", "4.0.0-multisource.10", "4.0.0-multisource.11", "4.0.0-multisource.12"}, metadata["version"]
     assert metadata["depends"]["java"] == ">=17", metadata["depends"]
     assert "1.20.3" in metadata["depends"]["minecraft"]
@@ -23,6 +26,13 @@ with zipfile.ZipFile(jar) as archive:
             major = int.from_bytes(archive.read(name)[6:8], "big")
             assert major <= 61, f"{name} requires newer Java (class major {major})"
     mixins = json.loads(archive.read("easyauth.mixins.json"))
+    if has_tab_diagnostics:
+        assert "xyz/nikitacartes/easyauth/diagnostics/TabListDiagnostics.class" in names
+        client_diagnostics = archive.read("xyz/nikitacartes/easyauth/client/TabListClientDiagnostics.class")
+        assert b"eatabdebug" in client_diagnostics and b"net/minecraft/class_" in client_diagnostics
+        for diagnostic in ("TabListConnectionDiagnosticsMixin", "TabListEncoderDiagnosticsMixin"):
+            assert diagnostic in mixins["server"], diagnostic
+            assert b"net/minecraft/class_" in archive.read(f"xyz/nikitacartes/easyauth/mixin/{diagnostic}.class")
     assert "ServerLoginPacketListenerImplMixin" in mixins["server"]
     assert "CommandsMixin" in mixins["server"], "Unauthenticated-command restriction missing"
     assert "PlayerDisplayNameMixin" in mixins["server"]
